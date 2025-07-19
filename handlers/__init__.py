@@ -1,9 +1,10 @@
 from aiogram import Dispatcher
-from . import comands, library_callbacks, messages
+from . import commands, library_callbacks, messages, search_commands
 
 def register_handlers(dp: Dispatcher):
-
-    comands.register_command_handlers(dp)
-    messages.register_message_handlers(dp)
+    
     library_callbacks.register_library_handlers(dp)
+    commands.register_command_handlers(dp)
+    search_commands.register_search_handlers(dp)
+    messages.register_message_handlers(dp)
     

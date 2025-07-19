@@ -12,7 +12,6 @@ def create_paper_keyboard(paper: dict, user_id: int, is_saved: bool = False) -> 
         is_saved: Сохранена ли статья пользователем
     """
     keyboard = InlineKeyboardBuilder()
-    
     # Кнопка ссылки на статью
     keyboard.add(
         InlineKeyboardButton(
@@ -36,8 +35,7 @@ def create_paper_keyboard(paper: dict, user_id: int, is_saved: bool = False) -> 
                 callback_data=f"save_paper:{paper['url']}"
             )
         )
-    
-    # Кнопка добавления тегов (только если статья сохранена)
+        
     if is_saved:
         keyboard.add(
             InlineKeyboardButton(
@@ -45,9 +43,22 @@ def create_paper_keyboard(paper: dict, user_id: int, is_saved: bool = False) -> 
                 callback_data=f"add_tags:{paper['url']}"
             )
         )
+        
+    keyboard.add(
+        InlineKeyboardButton(
+            text="📊 Суммаризация",
+            callback_data=f"summary:{paper['url']}"
+        )
+    )
     
-    # Располагаем кнопки: первая строка - ссылка, вторая - действия
-    keyboard.adjust(1, 2)
+    summary_callback = f"summary:{paper['url']}"
+    
+    
+    if is_saved:
+        keyboard.adjust(1, 2, 1)
+    else:
+        keyboard.adjust(1, 1, 1)
+    
     
     return keyboard
 
@@ -93,7 +104,22 @@ def create_library_keyboard(paper: dict, paper_id: int) -> InlineKeyboardBuilder
         )
     )
     
-    keyboard.adjust(1, 3)
+    # Кнопка экспорта в BibTeX
+    keyboard.add(
+        InlineKeyboardButton(
+            text="📁 Экспорт BibTeX",
+            callback_data=f"export_bibtex:{paper_id}"
+        )
+    )
+    
+    keyboard.add(
+        InlineKeyboardButton(
+            text="📊 Суммаризация",
+            callback_data=f"summary:{paper_id}"
+        )
+    )
+    
+    keyboard.adjust(2, 3)
     
     return keyboard
 

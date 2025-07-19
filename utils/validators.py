@@ -1,6 +1,6 @@
 import re
 import html
-from typing import List, Optional
+from typing import Optional
 
 class InputValidator:
     """
@@ -134,3 +134,19 @@ class InputValidator:
         query = re.sub(r'\s+', ' ', query).strip()
         
         return query
+    
+    def escape_markdown(self, text: str) -> str:
+        """
+        Экранирование специальных символов Markdown
+        
+        Args:
+            text: Исходный текст
+            
+        Returns:
+            Экранированный текст
+        """
+        if not text:
+            return ""
+        
+        # Экранируем специальные символы Markdown
+        return re.sub(r'([_*[\]()~`>#+\-=|{}.!])', r'\\\1', text)

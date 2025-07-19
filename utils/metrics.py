@@ -3,9 +3,8 @@
 """
 
 import time
-import logging
 from collections import defaultdict, deque
-from typing import Dict, Any, Optional
+from typing import Dict, Any
 from datetime import datetime, timedelta
 from utils import setup_logger
 

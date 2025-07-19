@@ -6,7 +6,12 @@ class Config:
     """Конфигурация приложения из переменных окружения"""
     # Секреты
     BOT_TOKEN: str
-    
+    LLM_API_KEY: str
+    WEBAPP_URL: str
+    IEEE_API_KEY: Optional[str]
+    NCBI_API_KEY: Optional[str]
+    ADMIN_IDS: Optional[str]
+
     # Настройки логирования
     LOG_LEVEL: str
     LOG_FILE: str
@@ -39,11 +44,21 @@ def load_config() -> Config:
     load_dotenv()
 
     bot_token = os.getenv("BOT_TOKEN")
-    if not bot_token:
-        raise ValueError("BOT_TOKEN is required but not found in environment variables")
+    llm_api_key = os.getenv("LLM_API_KEY")
+    webapp_url = os.getenv("WEBAPP_URL")
+    ieee_api_key = os.getenv("IEEE_API_KEY")
+    ncbi_api_key = os.getenv("NCBI_API_KEY")
+    admin_ids = os.getenv("ADMIN_IDS", "").split(",") if os.getenv("ADMIN_IDS") else []
+    if not bot_token or not llm_api_key:
+        raise ValueError("BOT_TOKEN and LLM_API_KEY are required but not found in environment variables")
 
     return Config(
         BOT_TOKEN=bot_token,
+        LLM_API_KEY=llm_api_key,
+        WEBAPP_URL=webapp_url,
+        IEEE_API_KEY=ieee_api_key,
+        NCBI_API_KEY=ncbi_api_key,
+        ADMIN_IDS=list(map(int, admin_ids)) if admin_ids else [],
         LOG_LEVEL=os.getenv("LOG_LEVEL", "INFO"),
         LOG_FILE=os.getenv("LOG_FILE", "logs/bot.log"),
         MAX_RESULTS=int(os.getenv("MAX_RESULTS", "5")),

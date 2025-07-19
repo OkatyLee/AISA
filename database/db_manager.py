@@ -112,8 +112,31 @@ class DatabaseManager:
         
     async def get_user_library(self, user_id: int, limit: int = 50, offset: int = 0,
                             sort_by: str = "saved_at", order: str = "DESC") -> List[Dict[str, Any]]:
-        
-        valid_sort_fields = ["saved_at", "title", "published_date"]
+        '''
+        Получение библиотеки пользователя с пагинацией и сортировкой
+        :param user_id: ID пользователя
+        :param limit: Максимальное количество результатов
+        :param offset: Смещение для пагинации
+        :param sort_by: Поле для сортировки
+        :param order: Порядок сортировки (ASC или DESC)
+        :return: Список статей пользователя
+        Форматирование:
+        {
+            "id": int,
+            "user_id": int,
+            "arxiv_id": str,
+            "title": str,
+            "authors": list[str],
+            "url": str,
+            "abstract": str,
+            "publication_date": str,
+            "saved_at": str,
+            "tags": list[str],
+            "notes": str,
+            "categories": list[str]
+        }
+        '''
+        valid_sort_fields = ["saved_at", "title", "publication_date"]
         
         if sort_by not in valid_sort_fields:
             sort_by = "saved_at"

@@ -1,6 +1,5 @@
 from aiogram import Dispatcher, F
 from aiogram.types import Message
-from aiogram.filters import Command
 from utils import InputValidator
 
 validator = InputValidator()

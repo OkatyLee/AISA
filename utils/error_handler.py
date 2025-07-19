@@ -3,7 +3,7 @@
 """
 
 from typing import Optional, Dict, Any
-from aiogram.types import Message
+from aiogram.types import Message, CallbackQuery
 from utils import setup_logger
 from config.messages import ERROR_MESSAGES, EMOJI
 
@@ -88,6 +88,19 @@ class ErrorHandler:
         )
 
         await message.answer(error_text, parse_mode="Markdown")
+        
+    @staticmethod   
+    async def handle_summarization_error(callback: CallbackQuery, error: Exception):
+        """Обработка ошибок суммаризации"""
+        logger.error(f"Summarization error for user {callback.from_user.id}: {error}")
+
+        error_text = (
+            f"{EMOJI['error']} Произошла ошибка при суммаризации статьи.\n\n"
+            f"🔄 Попробуйте еще раз через несколько секунд.\n\n"
+            f"💬 Если проблема повторяется, обратитесь к администратору."
+        )
+        
+        await callback.message.answer(error_text, parse_mode="Markdown")
 
     @staticmethod
     def log_unexpected_error(context: str, error: Exception, user_data: Optional[Dict[str, Any]] = None):

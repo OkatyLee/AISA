@@ -28,3 +28,12 @@ ARXIV_NAMESPACES = {
     'arxiv': 'http://arxiv.org/schemas/atom'
 }
 
+# IEEE API (статичные данные)
+IEEE_API_BASE_URL = "https://api.ieee.org/api/v1/search/articles"
+
+# NCBI API (статичные данные)
+NCBI_API_BASE_URL = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils"
+
+# LLM API (статичные данные)
+LLM_API_BASE_URL = "https://openrouter.ai/api/v1"
+

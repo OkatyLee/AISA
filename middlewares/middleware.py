@@ -1,4 +1,3 @@
-from aiogram import Dispatcher
 from aiogram.types import Message, TelegramObject
 from typing import Callable, Awaitable, Dict, Any, Set
 from aiogram.dispatcher.middlewares.base import BaseMiddleware

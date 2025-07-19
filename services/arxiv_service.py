@@ -1,19 +1,19 @@
 import httpx
 from config.config import load_config
 from config.constants import ARXIV_API_BASE_URL, ARXIV_NAMESPACES, API_TIMEOUT_SECONDS
-from typing import List, Dict, Any, Optional
+from typing import List, Optional
 import xml.etree.ElementTree as ET
 from datetime import datetime
 from utils import setup_logger
 from utils.metrics import metrics
 import logging
-from aiogram.utils.markdown import hbold, hitalic, hlink
 from urllib.parse import urlparse
 import re
+from services.paper import Paper, PaperSearcher
 
 logger = setup_logger(name="arxiv_service_logger", log_file="logs/arxiv_service.log", level=logging.INFO)
 
-class ArxivSearcher:
+class ArxivSearcher(PaperSearcher):
     """
     Класс для работы с ArXiv API
     
@@ -38,12 +38,13 @@ class ArxivSearcher:
         if self.session:
             await self.session.aclose()
 
-    async def search_papers(self, query: str) -> List[Dict[str, str]]:
+    async def search_papers(self, query: str, limit: int = 5) -> List[Paper]:
         """
         Поиск статей в ArXiv API с кэшированием
         
         Args:
             query: Поисковый запрос
+            limit: Максимальное количество результатов (по умолчанию 5)
             
         Returns:
             Список словарей с информацией о статьях
@@ -52,7 +53,7 @@ class ArxivSearcher:
             raise ValueError("ArxivSearcher is not initialized")
             
         # Проверяем кэш
-        cache_key = f"search_{hash(query)}_{self.MAX_RESULTS}"
+        cache_key = f"search_{hash(query)}_{limit}"
         if cache_key in self._cache:
             logger.info(f"Возвращаем результат из кэша для запроса: {query}")
             metrics.record_operation("arxiv_search_cache_hit", 0, None, True)
@@ -62,14 +63,13 @@ class ArxivSearcher:
         search_start_time = datetime.now()
         
         try:
-            # Улучшенные параметры поиска
             url = ARXIV_API_BASE_URL
             params = {
                 'search_query': self._build_search_query(query),
                 'start': 0,
                 'sortBy': 'relevance',
                 'sortOrder': 'descending',
-                "max_results": self.MAX_RESULTS 
+                "max_results": limit
             }
 
             logger.info(f"Выполняем поиск ArXiv с запросом: {params['search_query']}")
@@ -130,7 +130,7 @@ class ArxivSearcher:
         # Для длинных запросов ищем в заголовке и аннотации
         return f'ti:"{clean_query}" OR abs:"{clean_query}"'
 
-    def _parse_arxiv_response(self, response_text: str) -> List[Dict[str, str]]:
+    def _parse_arxiv_response(self, response_text: str, truncate_abstract: bool = True) -> List[Paper]:
         """Парсинг ответа ArXiv API"""
         try:
             papers = []
@@ -141,52 +141,8 @@ class ArxivSearcher:
             entries = root.findall('atom:entry', namespaces)
             
             for entry in entries:
-                title = entry.find('atom:title', namespaces)
-                title_text = title.text.strip().replace('\n', ' ')
                 
-                summary = entry.find('atom:summary', namespaces)
-                if summary is not None:
-                    summary_text = summary.text.strip().replace('\n', ' ')
-                    
-                    if len(summary_text) > 200:
-                        summary_text = summary_text[:200] + "..."
-                else:
-                    summary_text = "Аннотация не найдена"
-                    
-                published = entry.find('atom:published', namespaces)
-                if published is not None:
-                    pub_date = datetime.fromisoformat(published.text.replace('Z', '+00:00'))
-                    formatted_date = pub_date.strftime('%Y-%m-%d')
-                else:
-                    formatted_date = "Дата не указана"
-                    
-                url = entry.find('atom:id', namespaces)
-                url_text = url.text.strip() if url is not None else ""
-                
-                authors = entry.findall('atom:author', namespaces)
-                
-                author_names = []
-                for author in authors:
-                    name = author.find('atom:name', namespaces)
-                    if name is not None:
-                        author_names.append(name.text.strip())
-                arxiv_id = self._extract_arxiv_id(url_text)
-                
-                categories = []
-                for category in entry.findall('atom:category', namespaces):
-                    term = category.get('term')
-                    if term:
-                        categories.append(term)
-                    
-                    paper = {
-                        'title': title_text,
-                        'authors': author_names,
-                        'url': url_text,
-                        'published_date': formatted_date,
-                        'abstract': summary_text,
-                        'categories': categories[:3],
-                        'arxiv_id': arxiv_id,
-                    }
+                paper = self._parse_arxiv_paper(entry, truncate_abstract)   
                 papers.append(paper)
             return papers
         except ET.ParseError as e:
@@ -195,8 +151,57 @@ class ArxivSearcher:
         except Exception as e:
             logger.error(f"Неизвестная ошибка: {e}")
             return []
+    
+    def _parse_arxiv_paper(self, entry: ET.Element, truncate_abstract: bool = True) -> Paper:
+        paper = Paper()
+        namespaces = ARXIV_NAMESPACES
+        title = entry.find('atom:title', namespaces)
+        title_text = title.text.strip().replace('\n', ' ') if title is not None else ""
+        paper.title = title_text
+        summary = entry.find('atom:summary', namespaces)
+        if summary is not None:
+            summary_text = summary.text.strip().replace('\n', ' ')
+            
+            if len(summary_text) > 200 and truncate_abstract:
+                summary_text = summary_text[:200] + "..."
+        else:
+            summary_text = "Аннотация не найдена"
+        paper.abstract = summary_text
+            
+        published = entry.find('atom:published', namespaces)
+        if published is not None:
+            pub_date = datetime.fromisoformat(published.text.replace('Z', '+00:00'))
+            formatted_date = pub_date.strftime('%Y-%m-%d')
+        else:
+            formatted_date = "Дата не указана"
+        paper.publication_date = formatted_date
+        url = entry.find('atom:id', namespaces)
+        url_text = url.text.strip() if url is not None else ""
+        paper.url = url_text
+        authors = entry.findall('atom:author', namespaces)
         
-    async def get_paper_by_url(self, url: str) -> Optional[Dict[str, Any]]:
+        author_names = []
+        for author in authors:
+            name = author.find('atom:name', namespaces)
+            if name is not None:
+                author_names.append(name.text.strip())
+        paper.authors = author_names
+        arxiv_id = self._extract_arxiv_id(url_text)
+        if arxiv_id:
+            paper.external_id = arxiv_id
+            paper.source = 'arxiv'
+        
+        categories = []
+        for category in entry.findall('atom:category', namespaces):
+            term = category.get('term')
+            if term:
+                categories.append(term)
+        paper.keywords = categories
+        if paper.keywords:
+            paper.journal = f"arXiv:{paper.keywords[0]}"
+        return paper
+
+    async def get_paper_by_url(self, url: str, truncate_abstract: bool = True) -> Optional[Paper]:
         try:
             if not url or not isinstance(url, str):
                 logger.error("Некорректный URL")
@@ -240,7 +245,7 @@ class ArxivSearcher:
                 logger.error(f"Пустой ответ от ArXiv API для {arxiv_id}")
                 return None
             
-            paper_data = self._parse_arxiv_response(response.text)[0]
+            paper_data = self._parse_arxiv_response(response.text, truncate_abstract)[0]
             if not paper_data:
                 logger.error(f"Не удалось распарсить ответ для {arxiv_id}")
                 return None
@@ -273,28 +278,3 @@ class ArxivSearcher:
             logger.error(f"Ошибка извлечения ArXiv ID: {e}")
             return None
 
-def format_paper_message(paper: Dict[str, Any], index: int) -> str:
-    """Форматирование информации о статье для вывода"""
-    title = hbold(f"{index}. {paper['title']}")
-    
-    authors_text = ', '.join(paper['authors'][:3])
-    if len(paper['authors']) > 3:
-        authors_text += f" и еще {len(paper['authors']) - 3} автора"
-    authors = hitalic(authors_text)
-
-    date = f'Опубликовано: {paper["published_date"]}' if paper['published_date'] else 'Дата публикации не указана'
-    categories = ''
-    if paper['categories']:
-        categories = ', '.join(paper['categories'])
-    
-    summary = f"📄 {paper['abstract']}"
-    
-    # Ссылка
-    url = hlink("🔗 Читать статью", paper['url'])
-    
-    # Собираем всё вместе
-    parts = [title, authors, date]
-    if categories:
-        parts.append(categories)
-    parts.extend([summary, url])
-    return '\n'.join(parts)
