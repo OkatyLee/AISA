@@ -1,5 +1,5 @@
 from aiogram import Bot, Dispatcher
-from config import load_config
+from config.config import load_config
 from typing import Tuple
 from aiogram.enums.parse_mode import ParseMode
 from aiogram.client.default import DefaultBotProperties
