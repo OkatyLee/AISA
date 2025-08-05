@@ -1,5 +1,5 @@
 from config import load_config
-from services.paper import Paper
+from services.utils.paper import Paper
 from utils.logger import setup_logger
 import logging
 from openai import AsyncOpenAI

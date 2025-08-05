@@ -1,7 +1,7 @@
 import httpx
 from config import load_config
 from config.constants import NCBI_API_BASE_URL, API_TIMEOUT_SECONDS
-from services.paper import Paper, PaperSearcher
+from services.utils.paper import Paper, PaperSearcher
 from utils import setup_logger
 from xml.etree import ElementTree as ET
 

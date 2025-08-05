@@ -1,5 +1,4 @@
-
-
+from . import nlu
 from .logger import setup_logger
 from .validators import InputValidator
 from .keyboard import (
@@ -8,4 +7,3 @@ from .keyboard import (
     create_library_navigation_keyboard
 )
 from .error_handler import ErrorHandler
-from .search_utils import SearchUtils

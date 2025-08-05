@@ -9,7 +9,7 @@ from utils.metrics import metrics
 import logging
 from urllib.parse import urlparse
 import re
-from services.paper import Paper, PaperSearcher
+from services.utils.paper import Paper, PaperSearcher
 
 logger = setup_logger(name="arxiv_service_logger", log_file="logs/arxiv_service.log", level=logging.INFO)
 

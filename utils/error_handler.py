@@ -13,6 +13,29 @@ class ErrorHandler:
     """Класс для централизованной обработки ошибок"""
     
     @staticmethod
+    async def handle_message_error(
+        message: Message, 
+        error: Exception, 
+        status_message: Optional[Message] = None
+    ):
+        """Обработка ошибок сообщений"""
+        logger.error(f"Message error for user {message.from_user.id}: {error}")
+        
+        # Удаляем сообщение о статусе если есть
+        if status_message:
+            try:
+                await status_message.delete()
+            except:
+                pass
+        
+        error_text = (
+            f"{ERROR_MESSAGES['message_failed']}\n\n"
+            f"Извините, произошла ошибка при обработке вашего запроса. "
+            f"🔄 Попробуйте переформулировать или использовать команды."
+        )
+        await message.answer(error_text, parse_mode="Markdown")
+    
+    @staticmethod
     async def handle_search_error(
         message: Message, 
         error: Exception, 

@@ -5,7 +5,7 @@ from utils.keyboard import create_paper_keyboard
 from utils.logger import setup_logger
 from database import SQLDatabase as db
 from aiogram.utils.markdown import hbold, hitalic, hlink
-from services.paper import Paper
+from services.utils.paper import Paper
 
 logger = setup_logger(
     name="search_commands_logger",

@@ -1,5 +1,7 @@
 from database import SQLDatabase as db
-from services import ArxivSearcher, LLMService, Paper
+from services.search import ArxivSearcher
+from services.utils.paper import Paper
+from services.nlp import LLMService
 from utils import create_paper_keyboard 
 from utils.error_handler import ErrorHandler
 from utils.metrics import track_operation
@@ -113,7 +115,7 @@ async def handle_library_stats(callback: CallbackQuery, **kwargs):
         else:
             stats_message += "📂 Категории не найдены\n"
         
-        await callback.message.answer(stats_message, parse_mode="MarkdownV2")
+        await callback.message.answer(stats_message, parse_mode="Markdown")
         await callback.answer()
         
     except Exception as e:
@@ -136,7 +138,7 @@ async def handle_library_delete(callback: CallbackQuery, **kwargs):
             # Обновляем сообщение, убираем кнопки
             await callback.message.edit_text(
                 callback.message.text + "\n\n❌ Статья удалена из библиотеки",
-                parse_mode="MarkdownV2"
+                parse_mode="Markdown"
             )
         else:
             await callback.answer("❌ Ошибка при удалении статьи")
@@ -195,7 +197,7 @@ async def handle_summary(callback: CallbackQuery, **kwargs):
                 
             if processing_msg:
                 await processing_msg.delete()
-            await callback.message.answer(summary, parse_mode="MarkdownV2")
+            await callback.message.answer(summary, parse_mode="Markdown")
             
         else:
             await callback.message.answer("❌ Статья не найдена")

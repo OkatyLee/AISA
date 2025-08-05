@@ -2,7 +2,7 @@
 import httpx
 from config import load_config
 from utils import setup_logger
-from services.paper import Paper, PaperSearcher
+from services.utils.paper import Paper, PaperSearcher
 from config.constants import IEEE_API_BASE_URL, API_TIMEOUT_SECONDS
 
 logger = setup_logger(

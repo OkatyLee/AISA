@@ -6,6 +6,18 @@ from typing import List
 class Paper:
     """
     Класс, представляющий научную статью.
+    Attributes:
+        title: Заголовок статьи
+        authors: Список авторов статьи
+        abstract: Аннотация статьи
+        doi: DOI статьи
+        publication_date: Дата публикации статьи
+        journal: Название журнала, в котором опубликована статья
+        keywords: Ключевые слова статьи
+        url: URL статьи
+        external_id: Внешний идентификатор статьи (например, arxiv_id, pubmed_id, ieee_id)
+        source: Источник статьи (arxiv, pubmed, ieee и т.д.)
+        source_metadata: Дополнительные метаданные источника
     """
     def __init__(self):
         self.title = ""

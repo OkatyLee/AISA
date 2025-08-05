@@ -1,10 +1,10 @@
 import asyncio
 from typing import List, Dict, Any, Optional
 
-from services.paper import Paper, PaperSearcher
-from services.arxiv_service import ArxivSearcher
-from services.ieee_service import IEEESearcher
-from services.ncbi_service import NCBISearcher
+from services.utils.paper import Paper, PaperSearcher
+from services.search import ArxivSearcher
+from services.search import IEEESearcher
+from services.search import NCBISearcher
 from utils import setup_logger
 
 logger = setup_logger(

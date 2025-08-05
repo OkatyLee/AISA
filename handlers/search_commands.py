@@ -2,13 +2,13 @@ from aiogram import Dispatcher
 from aiogram.types import Message
 from aiogram.filters import Command
 from utils.metrics import track_operation
-from services import ArxivSearcher, IEEESearcher, NCBISearcher
-from services import SearchService
+from services.search import ArxivSearcher, IEEESearcher, NCBISearcher
+from services.search import SearchService
 from utils.validators import InputValidator
 from utils.error_handler import ErrorHandler
 from utils.logger import setup_logger
 import asyncio
-from utils import SearchUtils
+from services.utils import SearchUtils
 
 from config import TYPING_DELAY_SECONDS
 
