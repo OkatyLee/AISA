@@ -1,5 +1,5 @@
 from database import SQLDatabase as db
-from services.search import ArxivSearcher
+from services.search import SearchService
 from services.utils.paper import Paper
 from services.nlp import LLMService
 from utils import create_paper_keyboard 
@@ -47,8 +47,9 @@ async def handle_save_paper(callback: CallbackQuery, **kwargs):
     """Обработчик сохранения статьи в библиотеку пользователя"""
     try:
         paper_url = callback.data.split(":", 1)[1]
+        
         user_id = callback.from_user.id
-        async with ArxivSearcher() as searcher:
+        with SearchService() as searcher:
             paper = await searcher.get_paper_by_url(paper_url)
         paper = paper.to_dict() if isinstance(paper, Paper) else paper
         success = await db.save_paper(user_id, paper)  
@@ -184,8 +185,8 @@ async def handle_summary(callback: CallbackQuery, **kwargs):
         user_id = callback.from_user.id
         paper_url = callback.data.split(":", 1)[1]
         await callback.answer("Начинаю суммаризацию...")
-        
-        async with ArxivSearcher() as searcher:
+
+        async with SearchService() as searcher:
             paper = await searcher.get_paper_by_url(paper_url, truncate_abstract=False)
 
         if paper:

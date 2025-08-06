@@ -20,16 +20,21 @@ class DatabaseManager:
                 CREATE TABLE IF NOT EXISTS saved_publications (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     user_id INTEGER NOT NULL,
-                    arxiv_id TEXT,
+                    external_id TEXT,
+                    source TEXT DEFAULT 'unknown',
                     title TEXT NOT NULL,
                     authors TEXT,
                     url TEXT NOT NULL,
                     abstract TEXT,
-                    published_date TEXT,
+                    doi TEXT,
+                    journal TEXT,
+                    publication_date TEXT,
+                    keywords TEXT,
                     saved_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     tags TEXT, 
                     notes TEXT,
                     categories TEXT,
+                    source_metadata TEXT,
                     UNIQUE (user_id, url)
                 )
             ''')
@@ -56,8 +61,10 @@ class DatabaseManager:
             
             # Индексы для производительности
             cursor.execute('CREATE INDEX IF NOT EXISTS idx_user_id ON saved_publications(user_id)')
-            cursor.execute('CREATE INDEX IF NOT EXISTS idx_arxiv_id ON saved_publications(arxiv_id)')
+            cursor.execute('CREATE INDEX IF NOT EXISTS idx_external_id ON saved_publications(external_id)')
+            cursor.execute('CREATE INDEX IF NOT EXISTS idx_source ON saved_publications(source)')
             cursor.execute('CREATE INDEX IF NOT EXISTS idx_saved_at ON saved_publications(saved_at)')
+            cursor.execute('CREATE INDEX IF NOT EXISTS idx_doi ON saved_publications(doi)')
             
             # Уникальный индекс для предотвращения дублирования
             cursor.execute('''
@@ -89,17 +96,27 @@ class DatabaseManager:
 
                 cursor.execute(
                     '''
-                    INSERT INTO saved_publications (user_id, arxiv_id, title, authors, url, abstract, published_date, tags, categories)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    ''', (user_id, 
-                          paper['arxiv_id'], 
-                          paper['title'], 
-                          ', '.join(paper['authors']), 
-                          paper['url'], paper['abstract'], 
-                          paper['published_date'], 
-                          ', '.join(tags) if tags else '',
-                          ', '.join(paper.get('categories', ['']))  
-                        )
+                    INSERT INTO saved_publications (
+                        user_id, external_id, source, title, authors, url, abstract, doi, 
+                        journal, publication_date, keywords, tags, categories, source_metadata
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ''', (
+                        user_id, 
+                        paper.get('external_id', paper.get('arxiv_id', '')), 
+                        paper.get('source', 'unknown'),
+                        paper['title'], 
+                        ', '.join(paper.get('authors', [])), 
+                        paper['url'], 
+                        paper.get('abstract', ''), 
+                        paper.get('doi', ''),
+                        paper.get('journal', ''),
+                        paper.get('publication_date', paper.get('published_date', '')), 
+                        ', '.join(paper.get('keywords', [])),
+                        ', '.join(tags) if tags else '',
+                        ', '.join(paper.get('categories', [])),
+                        json.dumps(paper.get('source_metadata', {}))
+                    )
                 )
                 
                 conn.commit()
@@ -161,18 +178,25 @@ class DatabaseManager:
                     paper = {
                         'id': row[0],
                         'user_id': row[1],
-                        'arxiv_id': row[2],
-                        'title': row[3],
-                        'authors': row[4].split(', ') if row[4] else [],
-                        'url': row[5],
-                        'abstract': row[6],
-                        'published_date': row[7],
-                        'saved_at': row[8],
-                        'tags': json.loads(row[9]) if row[9] else [],
-                        'notes': row[10],
-                        'categories': row[11].split(', ') if row[11] else []
+                        'external_id': row[2],
+                        'source': row[3],
+                        'title': row[4],
+                        'authors': row[5].split(', ') if row[5] else [],
+                        'url': row[6],
+                        'abstract': row[7],
+                        'doi': row[8],
+                        'journal': row[9],
+                        'publication_date': row[10],
+                        'keywords': row[11].split(', ') if row[11] else [],
+                        'saved_at': row[12],
+                        'tags': row[13].split(', ') if row[13] else [],
+                        'notes': row[14],
+                        'categories': row[15].split(', ') if row[15] else [],
+                        'source_metadata': json.loads(row[16]) if row[16] else {},
+                        # Поддержка обратной совместимости
+                        'arxiv_id': row[2] if row[3] == 'arxiv' else '',
+                        'published_date': row[10]  # Alias для совместимости
                     }
-                    paper['tags'] = json.loads(paper['tags']) if paper['tags'] else []
                     library.append(paper)
                 return library
         except Exception as e:
@@ -183,21 +207,44 @@ class DatabaseManager:
         try:
             with sqlite3.connect(self.db_path) as conn:
                 cursor = conn.cursor()
-                conn.row_factory = sqlite3.Row
                 cursor.execute(
                     '''
                     SELECT * FROM saved_publications
                     WHERE user_id = ? AND (
                         title LIKE ? OR authors LIKE ? 
-                        OR abstract LIKE ? OR tags LIKE ?)
+                        OR abstract LIKE ? OR tags LIKE ?
+                        OR keywords LIKE ? OR doi LIKE ?
+                        OR journal LIKE ?)
                     ORDER BY saved_at DESC
-                    ''', (user_id, f'%{query}%', f'%{query}%', f'%{query}%', f'%{query}%')
+                    ''', (user_id, f'%{query}%', f'%{query}%', f'%{query}%', 
+                          f'%{query}%', f'%{query}%', f'%{query}%', f'%{query}%')
                 )
                 rows = cursor.fetchall()
+                
                 library = []
                 for row in rows:
-                    paper = dict(row)
-                    paper['tags'] = json.loads(paper['tags']) if paper['tags'] else []
+                    paper = {
+                        'id': row[0],
+                        'user_id': row[1],
+                        'external_id': row[2],
+                        'source': row[3],
+                        'title': row[4],
+                        'authors': row[5].split(', ') if row[5] else [],
+                        'url': row[6],
+                        'abstract': row[7],
+                        'doi': row[8],
+                        'journal': row[9],
+                        'publication_date': row[10],
+                        'keywords': row[11].split(', ') if row[11] else [],
+                        'saved_at': row[12],
+                        'tags': row[13].split(', ') if row[13] else [],
+                        'notes': row[14],
+                        'categories': row[15].split(', ') if row[15] else [],
+                        'source_metadata': json.loads(row[16]) if row[16] else {},
+                        # Обратная совместимость
+                        'arxiv_id': row[2] if row[3] == 'arxiv' else '',
+                        'published_date': row[10]
+                    }
                     library.append(paper)
                 return library
         except Exception as e:
@@ -263,8 +310,11 @@ class DatabaseManager:
                 
                 all_tags = []
                 for row in cursor.fetchall():
-                    tags = json.loads(row[0]) if row[0] else []
-                    all_tags.extend(tags)
+                    tags_str = row[0] if row[0] else ""
+                    if tags_str:
+                        # Теги сохранены как строка через запятую
+                        tags = tags_str.split(', ')
+                        all_tags.extend(tags)
                 
                 # Подсчет популярности тегов
                 tag_counts = {}
@@ -311,20 +361,48 @@ class DatabaseManager:
             title = paper.get("title", "Без названия")
             authors = paper.get("authors", [])
             url = paper.get("url", "")
-            published_date = paper.get("published_date", "")
+            publication_date = paper.get("publication_date", "")
+            doi = paper.get("doi", "")
+            journal = paper.get("journal", "")
+            source = paper.get("source", "unknown")
+            external_id = paper.get("external_id", "")
 
-            authors_list = authors.split(', ') if authors else []
+            # Обработка авторов
+            if isinstance(authors, list):
+                authors_list = authors
+            else:
+                authors_list = authors.split(', ') if authors else []
             author_str = ' and '.join(authors_list)
 
-            entry = f"""
-            @article{{{paper['id']}
-                title = {{{title}}}
-                author = {{{author_str}}}
-                url = {{{url}}}
-                year = {{{published_date}}}
-                note = {{{'Saved from AISA'}}}
-                }}
-            """
+            # Определяем тип записи на основе источника
+            entry_type = "article"
+            if source == "arxiv":
+                entry_type = "misc"  # Препринты обычно misc
+            elif journal:
+                entry_type = "article"
+
+            # Формируем BibTeX запись
+            entry = f"""@{entry_type}{{{paper['id']},
+    title = {{{title}}},
+    author = {{{author_str}}},
+    year = {{{publication_date[:4] if publication_date else ""}}}"""
+
+            if journal:
+                entry += f",\n    journal = {{{journal}}}"
+            
+            if doi:
+                entry += f",\n    doi = {{{doi}}}"
+            
+            if url:
+                entry += f",\n    url = {{{url}}}"
+            
+            if external_id and source:
+                if source == "arxiv":
+                    entry += f",\n    eprint = {{{external_id}}},\n    archivePrefix = {{arXiv}}"
+                else:
+                    entry += f",\n    note = {{{source.upper()} ID: {external_id}}}"
+            
+            entry += f",\n    note = {{Saved from AISA - {source.upper()}}}\n}}"
             bibtex_entries.append(entry)
 
         return "\n\n".join(bibtex_entries)

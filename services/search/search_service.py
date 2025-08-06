@@ -51,6 +51,17 @@ class SearchService:
         
         logger.info(f"Инициализирован SearchService с сервисами: {list(self._services.keys())}")
 
+    def __enter__(self):
+        """Контекстный менеджер для использования SearchService."""
+        return self
+    
+    def __exit__(self, exc_type, exc_value, traceback):
+        """Закрытие сервисов при выходе из контекстного менеджера."""
+        for service in self._services.values():
+            if hasattr(service, 'close'):
+                service.close()
+        logger.info("Закрыты все сервисы в SearchService")
+
     def add_service(self, name: str, service: PaperSearcher) -> None:
         """
         Добавить новый поисковый сервис.
