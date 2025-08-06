@@ -1,11 +1,12 @@
+from utils.nlu.intents import Intent
 from utils.nlu.entities import Entity, EntityType, EntityExtractionResult
-from typing import Dict, List
+from typing import Any, Dict, List
 from re import Pattern
 import re
 
-class RuleBasedEntityClassifier:
+class RuleBasedEntityExtractor:
     """
-    Правило-ориентированный классификатор сущностей.
+    Правило-ориентированный извлекатель сущностей.
     Использует регулярные выражения для извлечения сущностей из текста.
     """
     
@@ -98,56 +99,73 @@ class RuleBasedEntityClassifier:
         
         return entities
    
-    def classify(self, text: str) -> EntityExtractionResult:
-        """
-        Классификация текста на основе правил
-       
-        Args:
-            text: Входной текст
-           
-        Returns:
-            EntityExtractionResult с найденными сущностями
-        """
+    async def extract(self, text: str, intent: Intent) -> EntityExtractionResult:
         entities = []
         
-        # Извлекаем сущности по регулярным выражениям
+        # Извлекаем сущности по паттернам
         for entity_type, patterns in self.patterns.items():
             for pattern in patterns:
                 matches = pattern.finditer(text)
                 for match in matches:
-                    # Обрабатываем случай с несколькими группами захвата
-                    if entity_type == EntityType.YEAR and match.groups() and len(match.groups()) > 1:
-                        # Для паттерна "с YYYY по YYYY" создаем две сущности
-                        for i, group in enumerate(match.groups()):
-                            if group and group.isdigit():
-                                entity = Entity(
-                                    type=entity_type,
-                                    value=group,
-                                    confidence=1.0,
-                                    start_pos=match.start(i+1),
-                                    end_pos=match.end(i+1)
-                                )
-                                entities.append(entity)
-                    else:
-                        # Стандартная обработка
-                        value = match.group(1).strip() if match.groups() else match.group().strip()
-                        entity = Entity(
-                            type=entity_type,
-                            value=value,
-                            confidence=1.0,
-                            start_pos=match.start(1) if match.groups() else match.start(),
-                            end_pos=match.end(1) if match.groups() else match.end()
-                        )
-                        entities.append(entity)
+                    entity = Entity(
+                        type=entity_type,
+                        value=match.group(1) if match.groups() else match.group(0),
+                        confidence=0.8,
+                        start_pos=match.start(),
+                        end_pos=match.end()
+                    )
+                    
+                    # Нормализация значений
+                    entity.normalized_value = self._normalize_entity(entity)
+                    entities.append(entity)
         
-        # Добавляем ключевые слова
-        keyword_entities = self._extract_keywords(text)
-        entities.extend(keyword_entities)
+        # Извлекаем топики по словарю
+        entities.extend(self._extract_topics_by_dictionary(text))
         
-        # Удаляем дублирующиеся сущности
-        entities = self._remove_duplicates(entities)
-       
+        # Извлекаем авторов по словарю
+        entities.extend(self._extract_authors_by_dictionary(text))
+        
+        # Постобработка и дедупликация
+        entities = self._post_process_entities(entities)
+        
         return EntityExtractionResult(entities=entities, raw_text=text)
+    
+    def _extract_topics_by_dictionary(self, text: str) -> List[Entity]:
+        entities = []
+        text_lower = text.lower()
+        
+        for keyword in self.academic_keywords:
+            if keyword.lower() in text_lower:
+                start_pos = text_lower.find(keyword.lower())
+                entity = Entity(
+                    type=EntityType.TOPIC,
+                    value=keyword,
+                    confidence=0.9,
+                    start_pos=start_pos,
+                    end_pos=start_pos + len(keyword),
+                    normalized_value=keyword.lower()
+                )
+                entities.append(entity)
+        
+        return entities
+    
+    def _extract_authors_by_dictionary(self, text: str) -> List[Entity]:
+        entities = []
+        
+        for author in self.common_authors:
+            if author.lower() in text.lower():
+                start_pos = text.lower().find(author.lower())
+                entity = Entity(
+                    type=EntityType.AUTHOR,
+                    value=author,
+                    confidence=0.95,
+                    start_pos=start_pos,
+                    end_pos=start_pos + len(author),
+                    normalized_value=author
+                )
+                entities.append(entity)
+        
+        return entities
     
     def _remove_duplicates(self, entities: List[Entity]) -> List[Entity]:
         """Удаляет дублирующиеся сущности."""
@@ -161,5 +179,44 @@ class RuleBasedEntityClassifier:
                 unique_entities.append(entity)
         
         return unique_entities
+    
+    def _normalize_entity(self, entity: Entity) -> Any:
+        """Нормализация извлеченных сущностей"""
+        if entity.type == EntityType.YEAR:
+            try:
+                return int(entity.value)
+            except ValueError:
+                return None
+        
+        elif entity.type == EntityType.TOPIC:
+            return entity.value.lower().strip()
+        
+        elif entity.type == EntityType.AUTHOR:
+            return entity.value.title().strip()
+        
+        elif entity.type == EntityType.CITATION_COUNT:
+            try:
+                return int(entity.value)
+            except ValueError:
+                return None
+        
+        return entity.value
+    
+    def _post_process_entities(self, entities: List[Entity]) -> List[Entity]:
+        """Постобработка и дедупликация сущностей"""
+        # Удаляем дубликаты
+        seen = set()
+        deduplicated = []
+        
+        for entity in entities:
+            key = (entity.type, entity.normalized_value)
+            if key not in seen:
+                seen.add(key)
+                deduplicated.append(entity)
+        
+        # Сортируем по позиции в тексте
+        deduplicated.sort(key=lambda e: e.start_pos)
+        
+        return deduplicated
 
 

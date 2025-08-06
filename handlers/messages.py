@@ -3,12 +3,14 @@ from aiogram.types import Message
 from config.messages import COMMAND_MESSAGES
 from utils.validators import InputValidator
 from nlp.query_processor import QueryProcessingResult, QueryProcessor
+from nlp.context_manager import ContextManager
 from utils.nlu.intents import Intent
 from utils.logger import setup_logger
 from utils.error_handler import ErrorHandler
 
 validator = InputValidator()
 query_processor = QueryProcessor()
+context_manager = ContextManager("db/scientific_assistant.db")
 logger = setup_logger(__name__)
 
 def register_message_handlers(dp: Dispatcher):
@@ -18,6 +20,7 @@ def register_message_handlers(dp: Dispatcher):
 async def message_handler(message: Message):
     
     text = validator.sanitize_text(message.text)
+    user_id = message.from_user.id
 
     if validator.contains_suspicious_content(text):
         await message.answer(
@@ -26,43 +29,65 @@ async def message_handler(message: Message):
         )
         return
 
-    # Обрабатываем запрос с помощью NLP
+    # Получаем контекст пользователя
     try:
-        result = query_processor.process(text)
-        await _handle_processed_query(message, result)
+        user_context = await context_manager.get_user_context(user_id)
+        
+        # Обрабатываем запрос с помощью NLP с учетом контекста
+        result = await query_processor.process(text, user_context)
+        
+        # Обрабатываем результат
+        bot_response = await _handle_processed_query(message, result)
+        
+        # Обновляем контекст после обработки
+        await context_manager.update_user_context(
+            user_id=user_id,
+            message=text,
+            intent=result.intent.intent,
+            entities=result.entities.entities,
+            bot_response=bot_response,
+            search_results=result.query_params.get('search_results', [])
+        )
+        
     except Exception as e:
         await ErrorHandler.handle_message_error(message, e, status_message=None)
 
-async def _handle_processed_query(message: Message, result: QueryProcessingResult):
+async def _handle_processed_query(message: Message, result: QueryProcessingResult) -> str:
     """
     Обрабатывает результат NLP-анализа и отвечает пользователю.
+    
+    Returns:
+        str: Текст ответа бота для сохранения в контекст
     """
     intent = result.intent.intent
     params = result.query_params
     
     if intent == Intent.SEARCH:
-        await _handle_search_intent(message, params)
+        return await _handle_search_intent(message, params)
     elif intent == Intent.GREETING:
-        await _handle_greeting_intent(message)
+        return await _handle_greeting_intent(message)
     elif intent == Intent.HELP:
-        await _handle_help_intent(message)
+        return await _handle_help_intent(message)
     elif intent == Intent.LIST_SAVED:
-        await _handle_list_saved_intent(message)
+        return await _handle_list_saved_intent(message)
     elif intent == Intent.GET_SUMMARY:
-        await _handle_summary_intent(message, params)
+        return await _handle_summary_intent(message, params)
     elif intent == Intent.UNKNOWN:
-        await _handle_unknown_intent(message, result)
+        return await _handle_unknown_intent(message, result)
     else:
-        await message.answer(
-            "Я понял ваше намерение, но пока не умею это обрабатывать. "
-            "Попробуйте использовать команды или переформулируйте запрос."
-        )
+        response = ("Я понял ваше намерение, но пока не умею это обрабатывать. "
+                   "Попробуйте использовать команды или переформулируйте запрос.")
+        await message.answer(response)
+        return response
 
-async def _handle_search_intent(message: Message, params: dict):
+async def _handle_search_intent(message: Message, params: dict) -> str:
     """Обрабатывает намерение поиска.
     Args:
         message: Сообщение от пользователя
         params: Параметры запроса
+    
+    Returns:
+        str: Текст ответа бота
     """
     print(params)
     try:
@@ -73,14 +98,22 @@ async def _handle_search_intent(message: Message, params: dict):
         else:
             query = "машинное обучение"  # default query
 
+        # Создаем контекстный ответ
+        search_response = f"🔍 Ищу статьи по запросу: {query}"
+        await message.answer(search_response)
+        
         from .search_commands import search_command
-        message = message.model_copy(update={"text": f"/search {query}"})  # Подготавливаем текст команды
+        message = message.model_copy(update={"text": f"/search {query}"})
         await search_command(message)
         
+        return search_response
+        
     except Exception as e:
+        error_response = "Произошла ошибка при поиске. Попробуйте позже."
         await ErrorHandler.handle_search_error(message, e)
+        return error_response
 
-async def _handle_greeting_intent(message: Message):
+async def _handle_greeting_intent(message: Message) -> str:
     """Обрабатывает приветствие."""
     response = (
         "👋 Привет! Я научный ассистент AISA.\n\n"
@@ -92,32 +125,41 @@ async def _handle_greeting_intent(message: Message):
         "Просто напишите мне, что вас интересует, или используйте команды!"
     )
     await message.answer(response)
+    return response
 
-async def _handle_help_intent(message: Message):
+async def _handle_help_intent(message: Message) -> str:
     """Обрабатывает запрос помощи."""
     response = COMMAND_MESSAGES.get("help_text", "Я могу помочь вам с поиском и сохранением статей. Вот список доступных команд:")
     await message.answer(response)
+    return response
+    response = COMMAND_MESSAGES.get("help_text", "Я могу помочь вам с поиском и сохранением статей. Вот список доступных команд:")
+    await message.answer(response)
 
-async def _handle_list_saved_intent(message: Message):
+async def _handle_list_saved_intent(message: Message) -> str:
     """Обрабатывает запрос списка сохраненных статей."""
     try:
         from .commands import library_command
         await library_command(message)
+        return "Показываю ваши сохраненные статьи"
         
     except Exception as e:
+        error_response = "Ошибка при получении списка сохраненных статей"
         await ErrorHandler.handle_library_error(message, e)
+        return error_response
 
-async def _handle_summary_intent(message: Message, params: dict):
+async def _handle_summary_intent(message: Message, params: dict) -> str:
     """
     Обрабатывает запрос резюме.
     TODO: Реализовать логику получения резюме статьи. Пока заглушка
     """
-    await message.answer(
-        "Пока функционал получения резюме статьи из общения с ботом не реализован."
+    response = (
+        "Пока функционал получения резюме статьи из общения с ботом не реализован. "
         "📝 Для получения резюме статьи найдите ее в библиотеке или в поиске /search."
     )
+    await message.answer(response)
+    return response
 
-async def _handle_unknown_intent(message: Message, result):
+async def _handle_unknown_intent(message: Message, result) -> str:
     """Обрабатывает неопознанное намерение."""
     confidence = result.intent.confidence
     
@@ -128,8 +170,8 @@ async def _handle_unknown_intent(message: Message, result):
             "• Использовать команды (/help для справки)\n"
             "• Переформулировать запрос\n"
             "• Быть более конкретным\n\n"
-            "Например: \"Найди статьи про machine learning\" или \"Мои сохраненные статьи\""
-            "Рекомендую использовать команды для более точных запросов."
+            "Например: \"Найди статьи про machine learning\" или \"Мои сохраненные статьи\"\n"
+            "Рекомендую использовать команды для более точных запросов.\n"
             "Ключевые слова и авторов лучше писать на английском языке."
         )
     else:
@@ -146,6 +188,7 @@ async def _handle_unknown_intent(message: Message, result):
             )
     
     await message.answer(response)
+    return response
 
 def _intent_to_text(intent: Intent) -> str:
     """Преобразует намерение в текстовое описание."""

@@ -1,6 +1,6 @@
 from enum import Enum
 from typing import List, Optional, Any
-from attr import dataclass
+from dataclasses import dataclass
 
 class EntityType(Enum):
     """Типы сущностей для извлечения информации.
@@ -32,12 +32,18 @@ class Entity:
     """
     Представляет сущность, извлеченную из текста.
     Attributes:
-        type: Тип сущности (например, AUTHOR, TOPIC и т.д.)
-        value: Значение сущности
-        confidence: Уверенность в классификации (от 0 до 1)
-        start_pos: Начальная позиция сущности в исходном тексте
-        end_pos: Конечная позиция сущности в исходном тексте
-        normalized_value: Дополнительное нормализованное значение (если применимо)
+        type: EntityType
+            Тип сущности (например, AUTHOR, TOPIC и т.д.)
+        value: str
+            Значение сущности
+        confidence: float
+            Уверенность в классификации (от 0 до 1)
+        start_pos: int
+            Начальная позиция сущности в исходном тексте
+        end_pos: int
+            Конечная позиция сущности в исходном тексте
+        normalized_value: Optional[Any]
+            Дополнительное нормализованное значение (если применимо)
     """
     type: EntityType
     value: str
@@ -51,8 +57,10 @@ class EntityExtractionResult:
     """
     Результат извлечения сущностей из текста.
     Attributes:
-        entities: Список извлеченных сущностей
-        raw_text: Исходный текст, из которого были извлечены сущности
+        entities: List[Entity]
+            Список извлеченных сущностей
+        raw_text: str
+            Исходный текст, из которого были извлечены сущности
     """
     entities: List[Entity]
     raw_text: str

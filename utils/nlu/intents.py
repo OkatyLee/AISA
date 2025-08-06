@@ -1,6 +1,6 @@
 from enum import Enum
 from typing import List, Tuple
-from attr import dataclass
+from dataclasses import dataclass
 
 class Intent(Enum):
     """

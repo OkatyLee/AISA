@@ -7,12 +7,19 @@ from attr import dataclass
 from utils.nlu.intents import Intent, IntentResult
 
 class RuleBasedIntentClassifier:
+    """
+    Классификатор намерений на основе правил.
+    """
     
     def __init__(self):
         self.patterns = {
             Intent.SEARCH: [
                 r"найд[иу]|поищ[иу]|ищ[ую]|search|что есть по|статьи про",
-                r"хочу найти|нужны статьи|поиск.*по|что нового.*в области"
+                r"хочу найти|нужны статьи|поиск.*по|что нового.*в области",
+                r"еще статьи|больше статей|дополнительно|также",
+                r"от автора|автор[а-я]*\s+[А-Я]|from author|by\s+[A-Z]",
+                r"за.*год|в.*году|year.*\d{4}",
+                r"больше информации|дополнительные данные|еще.*результат"
             ],
             Intent.SAVE_ARTICLE: [
                 r"сохрани|добавь.*избранное|запомни|save|в закладки",
@@ -41,12 +48,13 @@ class RuleBasedIntentClassifier:
                 re.compile(pattern, re.IGNORECASE) for pattern in patterns
             ]
             
-    def classify(self, text: str) -> IntentResult:
+    def classify(self, text: str, context_intent: Intent = None) -> IntentResult:
         """
-        Классификация текста на основе правил
+        Классификация текста на основе правил с учетом контекста.
         
         Args:
             text: Входной текст
+            context_intent: Предыдущее намерение из контекста
             
         Returns:
             IntentResult с определенным намерением и уверенностью
@@ -62,6 +70,12 @@ class RuleBasedIntentClassifier:
                     score += len(matches) * 0.5  # Каждое совпадение увеличивает уверенность
             if score > 0:
                 scores[intent] = score
+
+        # Если ничего не найдено, но есть контекст и текст короткий (возможно уточнение)
+        if not scores and context_intent and len(text.split()) <= 5:
+            if context_intent == Intent.SEARCH:
+                # Короткие фразы в контексте поиска считаем продолжением поиска
+                scores[Intent.SEARCH] = 0.3
 
         if not scores:
             return IntentResult(Intent.UNKNOWN, 0.0, [])
