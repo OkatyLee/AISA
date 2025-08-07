@@ -4,6 +4,7 @@ from config import load_config
 from utils import setup_logger
 from services.utils.paper import Paper, PaperSearcher
 from config.constants import IEEE_API_BASE_URL, API_TIMEOUT_SECONDS
+from typing import Optional, Dict, Any
 
 logger = setup_logger(
     name="ieee_service_logger",
@@ -34,19 +35,28 @@ class IEEESearcher(PaperSearcher):
         if self.client:
             await self.client.aclose()
     
-    async def search_papers(self, query: str, limit: int = 10) -> list[Paper]:
+    async def search_papers(self, query: str, limit: int = 10, filters: Optional[Dict[str, Any]] = None) -> list[Paper]:
         """
         Поиск статей по запросу в IEEE API.
         
         :param query: Запрос для поиска.
         :param limit: Максимальное количество результатов для возврата.
+        :param filters: Фильтры для поиска (year, author и т.д.)
         :return: Список объектов Paper.
         """
+        # Строим поисковый запрос с учетом фильтров
+        enhanced_query = self._build_enhanced_query(query, filters)
+        
         params = {
-            "querytext": query,
+            "querytext": enhanced_query,
             "max_records": min(limit, 200),
             "start_record": 1
         }
+        
+        # Добавляем параметры фильтрации через API, если поддерживается
+        if filters:
+            if 'year' in filters and filters['year']:
+                params["publication_year"] = str(filters['year'])
 
         response = await self._make_request(params)
         data = response.json()
@@ -57,6 +67,10 @@ class IEEESearcher(PaperSearcher):
                 paper = self._parse_ieee_article(item)
                 if paper:
                     papers.append(paper)
+        
+        # Применяем дополнительную фильтрацию
+        if filters:
+            papers = self._apply_post_filters(papers, filters)
                             
         return papers
     
@@ -147,3 +161,57 @@ class IEEESearcher(PaperSearcher):
         except Exception as e:
             logger.error(f"Ошибка при парсинге статьи IEEE: {e}")
             return None
+    
+    def _build_enhanced_query(self, query: str, filters: Optional[Dict[str, Any]] = None) -> str:
+        """
+        Строит улучшенный запрос для IEEE API с учетом фильтров
+        
+        Args:
+            query: Базовый поисковый запрос
+            filters: Фильтры поиска
+            
+        Returns:
+            Улучшенный поисковый запрос
+        """
+        query_parts = [query]
+        
+        if filters:
+            # Фильтр по автору - добавляем в запрос
+            if 'author' in filters and filters['author']:
+                author = filters['author']
+                query_parts.append(f'("{author}" in au)')
+        
+        return ' AND '.join(query_parts)
+    
+    def _apply_post_filters(self, papers: list[Paper], filters: Dict[str, Any]) -> list[Paper]:
+        """
+        Применяет дополнительные фильтры к результатам поиска
+        
+        Args:
+            papers: Список статей для фильтрации
+            filters: Словарь с фильтрами
+            
+        Returns:
+            Отфильтрованный список статей
+        """
+        filtered_papers = []
+        
+        for paper in papers:
+            # Фильтр по автору (дополнительная проверка)
+            if 'author' in filters and filters['author']:
+                author_filter = filters['author'].lower()
+                paper_authors = [author.lower() for author in paper.authors]
+                if not any(author_filter in author for author in paper_authors):
+                    continue
+            
+            # Фильтр по году (если не был применен через API)
+            if 'year' in filters and filters['year']:
+                year_filter = str(filters['year'])
+                if paper.publication_date:
+                    paper_year = str(paper.publication_date)
+                    if paper_year != year_filter:
+                        continue
+            
+            filtered_papers.append(paper)
+        
+        return filtered_papers

@@ -7,6 +7,7 @@ from nlp.context_manager import ContextManager
 from utils.nlu.intents import Intent
 from utils.logger import setup_logger
 from utils.error_handler import ErrorHandler
+from .search_commands import extract_search_filters
 
 validator = InputValidator()
 query_processor = QueryProcessor()
@@ -98,13 +99,61 @@ async def _handle_search_intent(message: Message, params: dict) -> str:
         else:
             query = "машинное обучение"  # default query
 
+        # Создаем фильтры из извлеченных сущностей
+        filters = {}
+        if "year" in params:
+            filters["year"] = params["year"]
+        if "author" in params:
+            filters["author"] = params["author"]
+        
+        # Также извлекаем фильтры из текста запроса (синтаксис year:2023, author:"Name")
+        original_query = query
+        query, additional_filters = extract_search_filters(query)
+        
+        # Объединяем фильтры из сущностей и текста
+        filters.update(additional_filters)
+        
+        # Формируем команду для поиска
+        search_command_text = f"/search {query}"
+        
         # Создаем контекстный ответ
-        search_response = f"🔍 Ищу статьи по запросу: {query}"
+        filter_info = ""
+        if filters:
+            filter_parts = []
+            if "year" in filters:
+                filter_parts.append(f"год: {filters['year']}")
+            if "author" in filters:
+                filter_parts.append(f"автор: {filters['author']}")
+            filter_info = f" (фильтры: {', '.join(filter_parts)})"
+        
+        search_response = f"🔍 Ищу статьи по запросу: {query}{filter_info}"
         await message.answer(search_response)
         
         from .search_commands import search_command
-        message = message.model_copy(update={"text": f"/search {query}"})
-        await search_command(message)
+        from services.search import SearchService
+        from services.utils import SearchUtils
+        
+        # Выполняем поиск напрямую с фильтрами
+        try:
+            search_service = SearchService()
+            results = await search_service.search_papers(query, limit=5, filters=filters)
+            
+            if not results or not any(result.success for result in results.values()):
+                await SearchUtils._send_no_results_message(message, original_query)
+                return search_response
+            
+            # Получаем сохраненные статьи пользователя для проверки
+            saved_urls = await SearchUtils._get_user_saved_urls(message.from_user.id)
+            aggregated_results = search_service.aggregate_results(results)
+            
+            # Отправляем результаты
+            await SearchUtils._send_search_results(message, aggregated_results, query, saved_urls)
+            
+        except Exception as search_error:
+            logger.error(f"Ошибка при поиске через NLP: {search_error}")
+            # Fallback на обычную команду поиска
+            message = message.model_copy(update={"text": search_command_text})
+            await search_command(message)
         
         return search_response
         

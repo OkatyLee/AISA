@@ -98,7 +98,8 @@ class SearchService:
         query: str,
         limit: int = 10,
         services: Optional[List[str]] = None,
-        concurrent: bool = True
+        concurrent: bool = True,
+        filters: Optional[Dict[str, Any]] = None
     ) -> Dict[str, SearchResult]:
         """
         Поиск статей через выбранные сервисы.
@@ -108,6 +109,7 @@ class SearchService:
             limit: Максимальное количество результатов на сервис
             services: Список сервисов для использования. Если None, используются все
             concurrent: Выполнять поиск параллельно
+            filters: Фильтры поиска (year, author и т.д.)
             
         Returns:
             Словарь с результатами поиска по каждому сервису
@@ -126,22 +128,23 @@ class SearchService:
         logger.info(f"Начинаем поиск по запросу '{query}' через сервисы: {list(available_services.keys())}")
 
         if concurrent:
-            return await self._search_concurrent(query, limit, available_services)
+            return await self._search_concurrent(query, limit, available_services, filters)
         else:
-            return await self._search_sequential(query, limit, available_services)
+            return await self._search_sequential(query, limit, available_services, filters)
 
     async def _search_concurrent(
         self,
         query: str,
         limit: int,
-        services: Dict[str, PaperSearcher]
+        services: Dict[str, PaperSearcher],
+        filters: Optional[Dict[str, Any]] = None
     ) -> Dict[str, SearchResult]:
         """Параллельный поиск через все сервисы."""
         tasks = []
         
         for name, service in services.items():
             task = asyncio.create_task(
-                self._search_single_service(name, service, query, limit),
+                self._search_single_service(name, service, query, limit, filters),
                 name=f"search_{name}"
             )
             tasks.append(task)
@@ -164,14 +167,15 @@ class SearchService:
         self,
         query: str,
         limit: int,
-        services: Dict[str, PaperSearcher]
+        services: Dict[str, PaperSearcher],
+        filters: Optional[Dict[str, Any]] = None
     ) -> Dict[str, SearchResult]:
         """Последовательный поиск через сервисы."""
         results = {}
         
         for name, service in services.items():
             try:
-                result = await self._search_single_service(name, service, query, limit)
+                result = await self._search_single_service(name, service, query, limit, filters)
                 results[name] = result
             except Exception as e:
                 logger.error(f"Ошибка при поиске в {name}: {e}")
@@ -184,12 +188,13 @@ class SearchService:
         name: str,
         service: PaperSearcher,
         query: str,
-        limit: int
+        limit: int,
+        filters: Optional[Dict[str, Any]] = None
     ) -> SearchResult:
         """Поиск через один сервис."""
         try:
             async with service:
-                papers = await service.search_papers(query, limit)
+                papers = await service.search_papers(query, limit, filters)
                 logger.info(f"Сервис {name}: найдено {len(papers)} статей")
                 return SearchResult(name, papers)
         except Exception as e:

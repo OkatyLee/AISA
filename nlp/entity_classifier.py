@@ -22,13 +22,21 @@ class RuleBasedEntityExtractor:
                 re.compile(r'\b(19|20)\d{2}\b'),  # Группа захвата всего года
                 re.compile(r'за (\d{4}) год'),
                 re.compile(r'в (\d{4}) году'),
-                re.compile(r'с (\d{4}) по (\d{4})')  # Этот паттерн имеет 2 группы!
+                re.compile(r'с (\d{4}) по (\d{4})'),  # Этот паттерн имеет 2 группы!
+                re.compile(r'(\d{4})\s*год'),  # 2023 год
+                re.compile(r'год[а-я]*\s*(\d{4})'),  # года 2023
+                re.compile(r'статьи за (\d{4})'),  # статьи за 2023
+                re.compile(r'публикации (\d{4}) года'),  # публикации 2023 года
             ],
             EntityType.AUTHOR: [
                 re.compile(r'\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)\b'),  # Улучшенный паттерн для составных имен
                 re.compile(r'\b([А-Я][а-я]+(?:\s+[А-Я][а-я]+)+)\b'),  # То же для русских имен
                 re.compile(r'статьи ([А-Я][а-я]+(?:\s+[А-Я][а-я]+)*)', re.IGNORECASE),
-                re.compile(r'работы ([А-Я][а-я]+(?:\s+[А-Я][а-я]+)*)', re.IGNORECASE)
+                re.compile(r'работы ([А-Я][а-я]+(?:\s+[А-Я][а-я]+)*)', re.IGNORECASE),
+                re.compile(r'от автора\s+([А-Я][а-я]+(?:\s+[А-Я][а-я]+)*)', re.IGNORECASE),  # от автора Smith
+                re.compile(r'papers by\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)', re.IGNORECASE),  # papers by Smith
+                re.compile(r'публикации\s+([А-Я][а-я]+(?:\s+[А-Я][а-я]+)*)', re.IGNORECASE),  # публикации Иванова
+                re.compile(r'исследования\s+(?:автора\s+)?([А-Я][а-я]+(?:\s+[А-Я][а-я]+)*)', re.IGNORECASE)  # исследования автора Петров
             ],
             EntityType.TOPIC: [
                 # Используем жадный квантификатор и улучшаем границы
@@ -98,7 +106,7 @@ class RuleBasedEntityExtractor:
                 start = pos + 1
         
         return entities
-   
+    
     async def extract(self, text: str, intent: Intent) -> EntityExtractionResult:
         entities = []
         

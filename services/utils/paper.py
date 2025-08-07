@@ -1,6 +1,6 @@
 
 from abc import ABC, abstractmethod
-from typing import List
+from typing import List, Optional, Dict, Any
 
 
 class Paper:
@@ -72,12 +72,13 @@ class PaperSearcher(ABC):
     Абстрактный класс для поиска научных статей.
     """
     @abstractmethod
-    async def search_papers(self, query: str, limit: int = 10) -> List[Paper]:
+    async def search_papers(self, query: str, limit: int = 10, filters: Optional[Dict[str, Any]] = None) -> List[Paper]:
         """
         Поиск статей по запросу.
 
         :param query: Запрос для поиска.
         :param limit: Максимальное количество результатов для возврата.
+        :param filters: Фильтры для поиска (year, author, journal и т.д.)
         :return: Список объектов Article.
         """
         pass

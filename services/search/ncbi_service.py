@@ -4,6 +4,7 @@ from config.constants import NCBI_API_BASE_URL, API_TIMEOUT_SECONDS
 from services.utils.paper import Paper, PaperSearcher
 from utils import setup_logger
 from xml.etree import ElementTree as ET
+from typing import Optional, Dict, Any
 
 
 logger = setup_logger(
@@ -51,17 +52,21 @@ class NCBISearcher(PaperSearcher):
             logger.error(f"Request error: {e}")
             raise
 
-    async def search_papers(self, query: str, limit: int = 10) -> list[Paper]:
+    async def search_papers(self, query: str, limit: int = 10, filters: Optional[Dict[str, Any]] = None) -> list[Paper]:
         """
         Поиск статей по запросу в NCBI API.
         
         :param query: Запрос для поиска.
         :param limit: Максимальное количество результатов для возврата.
+        :param filters: Фильтры для поиска (year, author и т.д.)
         :return: Список объектов Paper.
         """
+        # Строим улучшенный запрос с фильтрами
+        enhanced_query = self._build_enhanced_query(query, filters)
+        
         params = {
             "db": "pubmed",
-            "term": query,
+            "term": enhanced_query,
             "retmax": min(limit, 200),
             "retmode": "xml"
         }
@@ -78,8 +83,14 @@ class NCBISearcher(PaperSearcher):
         if not pmids:
             logger.warning("No PMIDs found in search response")
             return []
+
+        papers = await self._fetch_papers_details(pmids)
         
-        return await self._fetch_papers_details(pmids)
+        # Применяем дополнительную фильтрацию
+        if filters:
+            papers = self._apply_post_filters(papers, filters)
+        
+        return papers
     
     async def _fetch_papers_details(self, pmids: list[str]) -> list[Paper]:
         """
@@ -198,3 +209,63 @@ class NCBISearcher(PaperSearcher):
         pmid = url.split('/')[-2]
         papers = await self._fetch_papers_details([pmid])
         return papers[0] if papers else None
+    
+    def _build_enhanced_query(self, query: str, filters: Optional[Dict[str, Any]] = None) -> str:
+        """
+        Строит улучшенный запрос для NCBI API с учетом фильтров
+        
+        Args:
+            query: Базовый поисковый запрос
+            filters: Фильтры поиска
+            
+        Returns:
+            Улучшенный поисковый запрос
+        """
+        query_parts = [query]
+        
+        if filters:
+            # Фильтр по автору
+            if 'author' in filters and filters['author']:
+                author = filters['author']
+                query_parts.append(f'"{author}"[Author]')
+            
+            # Фильтр по году
+            if 'year' in filters and filters['year']:
+                year = str(filters['year'])
+                query_parts.append(f'"{year}"[Publication Date]')
+        
+        return ' AND '.join(query_parts)
+    
+    def _apply_post_filters(self, papers: list[Paper], filters: Dict[str, Any]) -> list[Paper]:
+        """
+        Применяет дополнительные фильтры к результатам поиска
+        
+        Args:
+            papers: Список статей для фильтрации
+            filters: Словарь с фильтрами
+            
+        Returns:
+            Отфильтрованный список статей
+        """
+        filtered_papers = []
+        
+        for paper in papers:
+            # Фильтр по автору (дополнительная проверка)
+            if 'author' in filters and filters['author']:
+                author_filter = filters['author'].lower()
+                paper_authors = [author.lower() for author in paper.authors]
+                if not any(author_filter in author for author in paper_authors):
+                    continue
+            
+            # Фильтр по году
+            if 'year' in filters and filters['year']:
+                year_filter = str(filters['year'])
+                if paper.publication_date:
+                    # Извлекаем год из даты публикации
+                    paper_year = paper.publication_date.split('-')[0] if '-' in paper.publication_date else paper.publication_date
+                    if paper_year != year_filter:
+                        continue
+            
+            filtered_papers.append(paper)
+        
+        return filtered_papers

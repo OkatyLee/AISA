@@ -1,7 +1,7 @@
 import httpx
 from config.config import load_config
 from config.constants import ARXIV_API_BASE_URL, ARXIV_NAMESPACES, API_TIMEOUT_SECONDS
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 import xml.etree.ElementTree as ET
 from datetime import datetime
 from utils import setup_logger
@@ -38,13 +38,14 @@ class ArxivSearcher(PaperSearcher):
         if self.session:
             await self.session.aclose()
 
-    async def search_papers(self, query: str, limit: int = 5) -> List[Paper]:
+    async def search_papers(self, query: str, limit: int = 5, filters: Optional[Dict[str, Any]] = None) -> List[Paper]:
         """
         Поиск статей в ArXiv API с кэшированием
         
         Args:
             query: Поисковый запрос
             limit: Максимальное количество результатов (по умолчанию 5)
+            filters: Фильтры поиска (year, author и т.д.)
             
         Returns:
             Список словарей с информацией о статьях
@@ -52,8 +53,8 @@ class ArxivSearcher(PaperSearcher):
         if not self.session:
             raise ValueError("ArxivSearcher is not initialized")
             
-        # Проверяем кэш
-        cache_key = f"search_{hash(query)}_{limit}"
+        # Создаем ключ кэша с учетом фильтров
+        cache_key = f"search_{hash(query)}_{limit}_{hash(str(filters))}"
         if cache_key in self._cache:
             logger.info(f"Возвращаем результат из кэша для запроса: {query}")
             metrics.record_operation("arxiv_search_cache_hit", 0, None, True)
@@ -64,8 +65,10 @@ class ArxivSearcher(PaperSearcher):
         
         try:
             url = ARXIV_API_BASE_URL
+            # Строим запрос с учетом фильтров
+            search_query = self._build_search_query(query, filters)
             params = {
-                'search_query': self._build_search_query(query),
+                'search_query': search_query,
                 'start': 0,
                 'sortBy': 'relevance',
                 'sortOrder': 'descending',
@@ -77,6 +80,10 @@ class ArxivSearcher(PaperSearcher):
             response.raise_for_status()
 
             papers = self._parse_arxiv_response(response.text)
+            
+            # Применяем дополнительную фильтрацию
+            if filters:
+                papers = self._apply_post_filters(papers, filters)
             
             # Сохраняем в кэш
             self._cache[cache_key] = papers
@@ -109,12 +116,13 @@ class ArxivSearcher(PaperSearcher):
             logger.error(f"Неизвестная ошибка: {e}")
             return []
     
-    def _build_search_query(self, query: str) -> str:
+    def _build_search_query(self, query: str, filters: Optional[Dict[str, Any]] = None) -> str:
         """
-        Создает оптимизированный поисковый запрос для ArXiv API
+        Создает оптимизированный поисковый запрос для ArXiv API с учетом фильтров
         
         Args:
             query: Исходный запрос пользователя
+            filters: Фильтры поиска (year, author и т.д.)
             
         Returns:
             Оптимизированный запрос для ArXiv API
@@ -123,12 +131,76 @@ class ArxivSearcher(PaperSearcher):
         clean_query = re.sub(r'[^\w\s\-]', ' ', query).strip()
         clean_query = re.sub(r'\s+', ' ', clean_query)
         
-        # Если запрос слишком короткий, ищем во всех полях
+        # Базовый запрос
         if len(clean_query.split()) <= 2:
-            return f'all:"{clean_query}"'
+            base_query = f'all:"{clean_query}"'
+        else:
+            base_query = f'ti:"{clean_query}" OR abs:"{clean_query}"'
         
-        # Для длинных запросов ищем в заголовке и аннотации
-        return f'ti:"{clean_query}" OR abs:"{clean_query}"'
+        # Добавляем фильтры
+        query_parts = [base_query]
+        
+        if filters:
+            # Фильтр по автору
+            if 'author' in filters and filters['author']:
+                author = filters['author']
+                query_parts.append(f'au:"{author}"')
+            
+            # Фильтр по году 
+            if 'year' in filters and filters['year']:
+                year = str(filters['year'])
+                # ArXiv поддерживает фильтрацию по дате публикации
+                query_parts.append(f'submittedDate:[{year}0101 TO {year}1231]')
+            
+            # Фильтр по журналу/категории
+            if 'journal' in filters and filters['journal']:
+                journal = filters['journal']
+                query_parts.append(f'cat:"{journal}"')
+        
+        # Объединяем все части через AND
+        return ' AND '.join(query_parts)
+    
+    def _apply_post_filters(self, papers: List[Paper], filters: Dict[str, Any]) -> List[Paper]:
+        """
+        Применяет дополнительные фильтры к результатам поиска
+        
+        Args:
+            papers: Список статей для фильтрации
+            filters: Словарь с фильтрами
+            
+        Returns:
+            Отфильтрованный список статей
+        """
+        filtered_papers = []
+        
+        for paper in papers:
+            # Фильтр по автору (дополнительная проверка)
+            if 'author' in filters and filters['author']:
+                author_filter = filters['author'].lower()
+                paper_authors = [author.lower() for author in paper.authors]
+                if not any(author_filter in author for author in paper_authors):
+                    continue
+            
+            # Фильтр по году
+            if 'year' in filters and filters['year']:
+                year_filter = str(filters['year'])
+                if paper.publication_date:
+                    try:
+                        # Пробуем извлечь год из даты публикации
+                        if isinstance(paper.publication_date, str):
+                            paper_year = paper.publication_date[:4] if len(paper.publication_date) >= 4 else None
+                        else:
+                            paper_year = str(paper.publication_date.year) if hasattr(paper.publication_date, 'year') else None
+                        
+                        if paper_year != year_filter:
+                            continue
+                    except (ValueError, AttributeError):
+                        # Если не можем извлечь год, пропускаем статью
+                        continue
+            
+            filtered_papers.append(paper)
+        
+        return filtered_papers
 
     def _parse_arxiv_response(self, response_text: str, truncate_abstract: bool = True) -> List[Paper]:
         """Парсинг ответа ArXiv API"""

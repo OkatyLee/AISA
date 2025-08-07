@@ -1,6 +1,8 @@
 from aiogram import Dispatcher
 from aiogram.types import Message
 from aiogram.filters import Command
+import re
+from typing import Dict, Any, Optional
 from utils.metrics import track_operation
 from services.search import ArxivSearcher, IEEESearcher, NCBISearcher
 from services.search import SearchService
@@ -19,6 +21,54 @@ logger = setup_logger(
 
 validator = InputValidator()
 
+
+def extract_search_filters(query: str) -> tuple[str, Dict[str, Any]]:
+    """
+    Извлекает фильтры из поискового запроса.
+    
+    Поддерживаемые фильтры:
+    - year:2023 или year:"2023"
+    - author:"John Smith" или author:smith
+    
+    Returns:
+        tuple: (cleaned_query, filters_dict)
+    """
+    filters = {}
+    cleaned_query = query
+    
+    # Извлечение фильтра по году
+    year_patterns = [
+        r'year:(\d{4})',  # year:2023
+        r'year:"(\d{4})"',  # year:"2023"
+        r'year:\'(\d{4})\''  # year:'2023'
+    ]
+    
+    for pattern in year_patterns:
+        match = re.search(pattern, cleaned_query, re.IGNORECASE)
+        if match:
+            filters['year'] = int(match.group(1))
+            cleaned_query = re.sub(pattern, '', cleaned_query, flags=re.IGNORECASE)
+            break
+    
+    # Извлечение фильтра по автору
+    author_patterns = [
+        r'author:"([^"]+)"',  # author:"John Smith"
+        r"author:'([^']+)'",  # author:'John Smith'
+        r'author:([^\s]+)'    # author:smith
+    ]
+    
+    for pattern in author_patterns:
+        match = re.search(pattern, cleaned_query, re.IGNORECASE)
+        if match:
+            filters['author'] = match.group(1).strip()
+            cleaned_query = re.sub(pattern, '', cleaned_query, flags=re.IGNORECASE)
+            break
+    
+    # Очищаем запрос от лишних пробелов
+    cleaned_query = ' '.join(cleaned_query.split())
+    
+    return cleaned_query, filters
+
 def register_search_handlers(dp: Dispatcher):
     dp.message.register(arxiv_command, Command("arxiv"))
     dp.message.register(ieee_command, Command("ieee"))
@@ -35,6 +85,10 @@ async def arxiv_command(message: Message, **kwargs):
     """
     # Извлечение и валидация запроса
     query = message.text.replace("/arxiv ", "").strip()
+    
+    # Извлекаем фильтры из запроса
+    query, filters = extract_search_filters(query)
+    
     query = validator.sanitize_text(query)
     
     # Проверка на потенциально опасный контент
@@ -65,7 +119,7 @@ async def arxiv_command(message: Message, **kwargs):
     try:
         # Выполняем поиск
         async with ArxivSearcher() as searcher:
-            papers = await searcher.search_papers(query)
+            papers = await searcher.search_papers(query, 10, filters)
             
         await status_message.delete()
         
@@ -89,6 +143,10 @@ async def ieee_command(message: Message, **kwargs):
     """
     try:
         query = message.text.replace("/ieee ", "").strip()
+        
+        # Извлекаем фильтры из запроса
+        query, filters = extract_search_filters(query)
+        
         query = validator.sanitize_text(query)
         
         if not query or len(query) < 3:
@@ -99,7 +157,7 @@ async def ieee_command(message: Message, **kwargs):
         status_message = await message.answer(f"🔍 Ищу статьи в IEEE по запросу: *{query}*...", parse_mode="Markdown")
         
         async with IEEESearcher() as ieee_service:
-            papers = await ieee_service.search_papers(query)
+            papers = await ieee_service.search_papers(query, 10, filters)
         
         await status_message.delete()
         
@@ -124,6 +182,10 @@ async def ncbi_command(message: Message, **kwargs):
     """
     try:
         query = message.text.replace("/ncbi ", "").strip()
+        
+        # Извлекаем фильтры из запроса
+        query, filters = extract_search_filters(query)
+        
         query = validator.sanitize_text(query)
 
         if not query or len(query) < 3:
@@ -134,7 +196,7 @@ async def ncbi_command(message: Message, **kwargs):
         status_message = await message.answer(f"🔍 Ищу статьи в NCBI по запросу: *{query}*...", parse_mode="Markdown")
 
         async with NCBISearcher() as ncbi_service:
-            papers = await ncbi_service.search_papers(query)
+            papers = await ncbi_service.search_papers(query, 10, filters)
 
         await status_message.delete()
 
@@ -170,6 +232,9 @@ async def search_command(message: Message, **kwargs):
         await SearchUtils._send_search_help(message)
         return
     
+    # Извлекаем фильтры из запроса
+    query, filters = extract_search_filters(query)
+    
     query = validator.sanitize_text(query)
     if not query or len(query) < 3:
         await SearchUtils._send_search_help(message)
@@ -190,7 +255,7 @@ async def search_command(message: Message, **kwargs):
         if not active_adapters:
             active_adapters = None
         search_service = SearchService()
-        results = await search_service.search_papers(query, limit=limit, services=active_adapters)
+        results = await search_service.search_papers(query, limit=limit, services=active_adapters, filters=filters)
         
         await status_message.delete()
         
