@@ -3,6 +3,7 @@ from aiogram.types import Message
 from aiogram.filters import Command
 import re
 from typing import Dict, Any, Optional
+from services.search.semantic_scholar_service import SemanticScholarSearcher
 from utils.metrics import track_operation
 from services.search import ArxivSearcher, IEEESearcher, NCBISearcher
 from services.search import SearchService
@@ -74,6 +75,7 @@ def register_search_handlers(dp: Dispatcher):
     dp.message.register(ieee_command, Command("ieee"))
     dp.message.register(ncbi_command, Command("ncbi"))
     dp.message.register(search_command, Command("search"))
+    dp.message.register(semantic_search_command, Command("semantic_search"))
 
 
 @track_operation("arxiv_command")
@@ -265,7 +267,43 @@ async def search_command(message: Message, **kwargs):
         
         # Получаем сохраненные статьи пользователя для проверки
         saved_urls = await SearchUtils._get_user_saved_urls(message.from_user.id)
-        results = search_service.aggregate_results(results)
+        results = search_service.aggregate_results(results, query)
+                # Отправляем результаты
+        await SearchUtils._send_search_results(message, results, query, saved_urls)
+
+    except Exception as e:
+        await ErrorHandler.handle_search_error(message, e, status_message)
+        
+@track_operation("semantic_search_command")
+async def semantic_search_command(message: Message, **kwargs):
+    """
+    Команда /semantic_search - поиск по семантическому контенту
+    """
+    query = message.text.replace("/semantic_search ", "").strip()
+    if not query:
+        await SearchUtils._send_search_help(message)
+        return
+
+    await message.bot.send_chat_action(message.chat.id, "typing")
+    status_message = await message.answer(f"🔍 Ищу статьи по семантическому запросу: *{validator.escape_markdown(query)}*...", parse_mode="Markdown")
+    
+    query, filters = extract_search_filters(query)
+    query = validator.sanitize_text(query)
+    if not query or len(query) < 3:
+        await SearchUtils._send_search_help(message)
+        return
+    try:
+        async with SemanticScholarSearcher() as search_service:
+            results = await search_service.search_papers(query, filters=filters)
+
+        await status_message.delete()
+
+        if not results:
+            await SearchUtils._send_no_results_message(message, query)
+            return
+
+        # Получаем сохраненные статьи пользователя для проверки
+        saved_urls = await SearchUtils._get_user_saved_urls(message.from_user.id)
         # Отправляем результаты
         await SearchUtils._send_search_results(message, results, query, saved_urls)
 

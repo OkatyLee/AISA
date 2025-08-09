@@ -1,3 +1,4 @@
+from datetime import datetime
 import sqlite3
 import hashlib
 from typing import Dict, Any, List
@@ -83,17 +84,19 @@ class DatabaseManager:
         try:
             with sqlite3.connect(self.db_path) as conn:
                 cursor = conn.cursor()
-
+                print('зашли в save_paper')
                 cursor.execute(
                     '''
                     SELECT id FROM saved_publications
-                    WHERE user_id = ? AND url = ?
-                    ''', (user_id, paper['url'])
+                    WHERE user_id = ? AND external_id = ?
+                    ''', (user_id, paper['external_id'])
                 )
                 
                 if cursor.fetchone():
                     return False
-
+                pub_date = paper.get('publication_date', paper.get('published_date', ''))
+                if isinstance(pub_date, datetime):
+                    pub_date = pub_date.date().isoformat()
                 cursor.execute(
                     '''
                     INSERT INTO saved_publications (
@@ -103,15 +106,15 @@ class DatabaseManager:
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ''', (
                         user_id, 
-                        paper.get('external_id', paper.get('arxiv_id', '')), 
+                        paper.get('external_id', ''), 
                         paper.get('source', 'unknown'),
-                        paper['title'], 
+                        paper.get('title', ''), 
                         ', '.join(paper.get('authors', [])), 
-                        paper['url'], 
+                        paper.get('url', ''), 
                         paper.get('abstract', ''), 
                         paper.get('doi', ''),
                         paper.get('journal', ''),
-                        paper.get('publication_date', paper.get('published_date', '')), 
+                        pub_date,
                         ', '.join(paper.get('keywords', [])),
                         ', '.join(tags) if tags else '',
                         ', '.join(paper.get('categories', [])),
@@ -406,4 +409,119 @@ class DatabaseManager:
             bibtex_entries.append(entry)
 
         return "\n\n".join(bibtex_entries)
-    
+
+    async def delete_paper_by_external_id(self, user_id: int, external_id: str, source: str) -> bool:
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    '''
+                    DELETE FROM saved_publications
+                    WHERE user_id = ? AND external_id = ? AND source = ?
+                    ''', (user_id, external_id, source)
+                )
+                conn.commit()
+                return cursor.rowcount > 0
+        except Exception as e:
+            logger.error(f"Ошибка при удалении статьи по внешнему ID: {e}")
+            return False
+        
+    async def delete_paper_by_url_part(self, user_id: int, url_part: str) -> bool:
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    '''
+                    DELETE FROM saved_publications
+                    WHERE user_id = ? AND url LIKE ?
+                    ''', (user_id, f'%{url_part}%')
+                )
+                conn.commit()
+                return cursor.rowcount > 0
+        except Exception as e:
+            logger.error(f"Ошибка при удалении статьи по части URL: {e}")
+            return False
+
+    async def delete_paper_by_title_hash(self, user_id: int, title_hash: str) -> bool:
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                # Получаем все заголовки статей пользователя
+                titles = cursor.execute(
+                    '''
+                    SELECT id, title FROM saved_publications
+                    WHERE user_id = ?
+                    ''', (user_id,)
+                ).fetchall()
+                
+                if not titles:
+                    return False
+                
+                for paper_id, title in titles:
+                    if hashlib.sha256(title.encode()).hexdigest() == title_hash:
+                        cursor.execute(
+                            '''
+                            DELETE FROM saved_publications
+                            WHERE id = ? AND user_id = ? AND title = ?
+                            ''', (paper_id, user_id, title)
+                        )
+                        conn.commit()
+                        return cursor.rowcount > 0
+                        
+                return False
+                
+        except Exception as e:
+            logger.error(f"Ошибка при удалении статьи по хешу заголовка: {e}")
+            return False
+
+    async def get_paper_by_title_hash(self, user_id: int, title_hash: str) -> Dict[str, Any]:
+        """
+        Получает статью из библиотеки пользователя по хешу заголовка.
+        
+        Args:
+            user_id: ID пользователя
+            title_hash: Хеш заголовка статьи
+            
+        Returns:
+            Словарь с данными статьи или None
+        """
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    '''
+                    SELECT id, external_id, source, title, authors, url, abstract, 
+                           doi, journal, publication_date, keywords, saved_at, 
+                           tags, notes, categories, source_metadata
+                    FROM saved_publications
+                    WHERE user_id = ?
+                    ''', (user_id,)
+                )
+                
+                papers = cursor.fetchall()
+                for paper in papers:
+                    # Проверяем хеш заголовка
+                    if hashlib.sha256(paper[3].encode()).hexdigest() == title_hash:
+                        return {
+                            "id": paper[0],
+                            "external_id": paper[1],
+                            "source": paper[2] or 'unknown',
+                            "title": paper[3],
+                            "authors": json.loads(paper[4]) if paper[4] else [],
+                            "url": paper[5],
+                            "abstract": paper[6] or '',
+                            "doi": paper[7] or '',
+                            "journal": paper[8] or '',
+                            "publication_date": paper[9] or '',
+                            "keywords": json.loads(paper[10]) if paper[10] else [],
+                            "saved_at": paper[11],
+                            "tags": json.loads(paper[12]) if paper[12] else [],
+                            "notes": paper[13] or '',
+                            "categories": json.loads(paper[14]) if paper[14] else [],
+                            "source_metadata": json.loads(paper[15]) if paper[15] else {}
+                        }
+                        
+                return None
+        except Exception as e:
+            logger.error(f"Ошибка при получении статьи по хешу заголовка: {e}")
+            return None

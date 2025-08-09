@@ -276,8 +276,8 @@ class LibraryApp {
             ? paper.categories.map(cat => `<span class="category-tag">${cat}</span>`).join('')
             : '';
         
-        const publishedDate = paper.published_date 
-            ? new Date(paper.published_date).toLocaleDateString('ru-RU')
+        const publishedDate = paper.publication_date 
+            ? new Date(paper.publication_date).toLocaleDateString('ru-RU')
             : 'Дата не указана';
         
         const savedDate = paper.saved_at 
@@ -312,9 +312,9 @@ class LibraryApp {
         const modalBody = document.getElementById('modalBody');
         
         modalTitle.textContent = paper.title;
-        
-        const publishedDate = paper.published_date 
-            ? new Date(paper.published_date).toLocaleDateString('ru-RU')
+
+        const publishedDate = paper.publication_date
+            ? new Date(paper.publication_date).toLocaleDateString('ru-RU')
             : 'Дата не указана';
             
         const categoriesHtml = paper.categories 

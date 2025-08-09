@@ -1,3 +1,4 @@
+import dateutil
 import httpx
 from config import load_config
 from config.constants import NCBI_API_BASE_URL, API_TIMEOUT_SECONDS
@@ -168,9 +169,7 @@ class NCBISearcher(PaperSearcher):
                     date_parts.append(month.text)
                 if day is not None:
                     date_parts.append(day.text)
-                
-                paper.publication_date = '-'.join(date_parts)
-            
+                paper.publication_date = dateutil.parser.parse('-'.join(date_parts)).isoformat(timespec='hours')
             # DOI
             article_ids = article.findall('.//ArticleId')
             for article_id in article_ids:

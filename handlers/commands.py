@@ -3,7 +3,7 @@ from aiogram.types import Message
 from aiogram.filters import Command
 import asyncio
 from utils import setup_logger, InputValidator
-from utils import create_paper_keyboard
+from services.utils.keyboard import create_paper_keyboard
 from utils.error_handler import ErrorHandler
 from utils.metrics import track_operation, metrics
 from database import SQLDatabase as db

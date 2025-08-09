@@ -1,7 +1,7 @@
 from aiogram.types import Message
 from config import COMMAND_MESSAGES, SEARCH_DELAY_SECONDS, TYPING_DELAY_SECONDS
 import asyncio
-from utils.keyboard import create_paper_keyboard
+from services.utils.keyboard import create_paper_keyboard
 from utils.logger import setup_logger
 from database import SQLDatabase as db
 from aiogram.utils.markdown import hbold, hitalic, hlink
@@ -96,7 +96,7 @@ class SearchUtils:
             authors_text += f" и еще {len(paper.authors) - 3} автора"
         authors = hitalic(authors_text)
 
-        date = f'Опубликовано: {paper.publication_date}' if paper.publication_date else 'Дата публикации не указана'
+        date = f'Опубликовано: {paper.publication_date.date().isoformat()}' if paper.publication_date else 'Дата публикации не указана'
         keywords = ''
         if paper.keywords:
             keywords = ', '.join(paper.keywords[:3])

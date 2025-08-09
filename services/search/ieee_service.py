@@ -1,4 +1,4 @@
-
+from datetime import datetime
 import httpx
 from config import load_config
 from utils import setup_logger
@@ -140,7 +140,7 @@ class IEEESearcher(PaperSearcher):
                                 paper.authors.append(full_name)
             paper.abstract = item.get('abstract', '')
             paper.doi = item.get('doi', '')
-            paper.publication_date = str(item.get('publication_year', ''))
+            paper.publication_date = datetime.fromisoformat(item.get('publication_year', ''))
             paper.journal = item.get('publication_title', '')
             paper.keywords = item.get('keywords', [])
             if paper.external_id:

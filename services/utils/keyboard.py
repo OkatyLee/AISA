@@ -1,8 +1,10 @@
 from aiogram.types import InlineKeyboardButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
+from services.utils.paper import Paper
 
-def create_paper_keyboard(paper: dict, user_id: int, is_saved: bool = False) -> InlineKeyboardBuilder:
+
+def create_paper_keyboard(paper: Paper, user_id: int, is_saved: bool = False) -> InlineKeyboardBuilder:
     """
     Создание клавиатуры для статьи
     
@@ -12,27 +14,47 @@ def create_paper_keyboard(paper: dict, user_id: int, is_saved: bool = False) -> 
         is_saved: Сохранена ли статья пользователем
     """
     keyboard = InlineKeyboardBuilder()
+    
     # Кнопка ссылки на статью
-    keyboard.add(
-        InlineKeyboardButton(
-            text="🔗 Ссылка на статью",
-            url=paper['url']
+    if isinstance(paper, Paper):
+        url = paper.url
+    else:
+        url = paper.get('url', '')
+    
+    if url:
+        keyboard.add(
+            InlineKeyboardButton(
+                text="🔗 Ссылка на статью",
+                url=url
+            )
         )
-    )
+    
+    # Получаем безопасные callback данные
+    if isinstance(paper, Paper):
+        safe_callback_data = lambda prefix: paper.get_safe_callback_data(prefix=prefix, max_length=60)
+    else:
+        # Для словаря создаем временный Paper объект
+        temp_paper = Paper(
+            title=paper.get('title', ''),
+            url=paper.get('url', ''),
+            external_id=paper.get('external_id', ''),
+            source=paper.get('source', '')
+        )
+        safe_callback_data = lambda prefix: temp_paper.get_safe_callback_data(prefix=prefix, max_length=60)
     
     # Кнопка сохранения/удаления
     if is_saved:
         keyboard.add(
             InlineKeyboardButton(
                 text="❌ Удалить из библиотеки",
-                callback_data=f"delete_paper:{paper['url']}"
+                callback_data=safe_callback_data("delete_paper")
             )
         )
     else:
         keyboard.add(
             InlineKeyboardButton(
                 text="💾 Сохранить в библиотеку",
-                callback_data=f"save_paper:{paper['url']}"
+                callback_data=safe_callback_data("save_paper")
             )
         )
         
@@ -40,25 +62,21 @@ def create_paper_keyboard(paper: dict, user_id: int, is_saved: bool = False) -> 
         keyboard.add(
             InlineKeyboardButton(
                 text="🏷️ Добавить теги",
-                callback_data=f"add_tags:{paper['url']}"
+                callback_data=safe_callback_data("add_tags")
             )
         )
         
     keyboard.add(
         InlineKeyboardButton(
             text="📊 Суммаризация",
-            callback_data=f"summary:{paper['url']}"
+            callback_data=safe_callback_data("summary")
         )
     )
-    
-    summary_callback = f"summary:{paper['url']}"
-    
     
     if is_saved:
         keyboard.adjust(1, 2, 1)
     else:
         keyboard.adjust(1, 1, 1)
-    
     
     return keyboard
 

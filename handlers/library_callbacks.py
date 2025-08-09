@@ -2,17 +2,18 @@ from database import SQLDatabase as db
 from services.search import SearchService
 from services.utils.paper import Paper
 from services.nlp import LLMService
-from utils import create_paper_keyboard 
+from services.utils.keyboard import create_paper_keyboard 
 from utils.error_handler import ErrorHandler
 from utils.metrics import track_operation
 from aiogram.types import CallbackQuery
 from aiogram import types
 from aiogram import Dispatcher
 from utils import setup_logger
+import logging
 
 logger = setup_logger(
     name="library_logger",
-    level="INFO"
+    level=logging.DEBUG
 )
 
 
@@ -46,13 +47,29 @@ def register_library_handlers(dp: Dispatcher):
 async def handle_save_paper(callback: CallbackQuery, **kwargs):
     """Обработчик сохранения статьи в библиотеку пользователя"""
     try:
-        paper_url = callback.data.split(":", 1)[1]
+        # Парсим callback данные: save_paper:source:id или save_paper:url:id или save_paper:hash:id
+        parts = callback.data.split(":", 2)
+        if len(parts) < 3:
+            await callback.answer("❌ Неверный формат данных")
+            return
+            
+        callback_type = parts[1]  # source, url, hash
+        callback_value = parts[2]  # actual id/value
         
         user_id = callback.from_user.id
-        with SearchService() as searcher:
-            paper = await searcher.get_paper_by_url(paper_url)
-        paper = paper.to_dict() if isinstance(paper, Paper) else paper
-        success = await db.save_paper(user_id, paper)  
+        print("пытаемся найти статью")
+        # Получаем статью, заново запрашивая ее по ID
+        paper = None
+        async with SearchService() as searcher:
+            paper = await searcher.get_paper_by_identifier(callback_type, callback_value, user_id)
+        print("нашли статью")
+        if not paper:
+            await callback.answer("❌ Не удалось найти данные статьи для сохранения.")
+            return
+        paper_dict = paper.to_dict() if isinstance(paper, Paper) else paper
+        print('заходим в save_paper')
+        success = await db.save_paper(user_id, paper_dict)
+        print('выход из save_paper')
         if success:
             await callback.message.edit_reply_markup(
                 reply_markup=create_paper_keyboard(
@@ -128,11 +145,30 @@ async def handle_library_stats(callback: CallbackQuery, **kwargs):
 async def handle_library_delete(callback: CallbackQuery, **kwargs):
     """Обработчик удаления статьи из библиотеки"""
     try:
-        paper_id = callback.data.split(":", 1)[1]
+        # Парсим callback данные: delete_paper:source:id или delete_paper:url:id или delete_paper:hash:id
+        parts = callback.data.split(":", 2)
+        if len(parts) < 3:
+            await callback.answer("❌ Неверный формат данных")
+            return
+            
+        callback_type = parts[1]  # source, url, hash
+        callback_value = parts[2]  # actual id/value
+        
         user_id = callback.from_user.id
         
-        # Удаляем статью из библиотеки
-        success = await db.delete_paper(user_id, paper_id)
+        # Удаляем статью из библиотеки по callback данным
+        # В зависимости от типа callback данных используем разные методы поиска
+        success = False
+        
+        if callback_type in ['arxiv', 'pubmed', 'ieee', 'doi']:
+            # Поиск по внешнему ID и источнику
+            success = await db.delete_paper_by_external_id(user_id, callback_value, callback_type)
+        elif callback_type == 'url':
+            # Поиск по части URL
+            success = await db.delete_paper_by_url_part(user_id, callback_value)
+        elif callback_type == 'hash':
+            # Поиск по хешу заголовка
+            success = await db.delete_paper_by_title_hash(user_id, callback_value)
         
         if success:
             await callback.answer("✅ Статья удалена из библиотеки")
@@ -183,11 +219,23 @@ async def handle_summary(callback: CallbackQuery, **kwargs):
     """Обработчик суммаризации статьи"""
     try:
         user_id = callback.from_user.id
-        paper_url = callback.data.split(":", 1)[1]
+        
+        # Парсим callback данные: summary:source:id или summary:url:id или summary:hash:id
+        parts = callback.data.split(":", 2)
+        if len(parts) < 3:
+            await callback.answer("❌ Неверный формат данных")
+            return
+            
+        callback_type = parts[1]  # source, url, hash
+        callback_value = parts[2]  # actual id/value
+        
         await callback.answer("Начинаю суммаризацию...")
 
+        # Получаем статью в зависимости от типа callback данных
+        paper = None
+        logger.debug(f"Получение статьи по {callback_type} с ID {callback_value} для пользователя {user_id}")
         async with SearchService() as searcher:
-            paper = await searcher.get_paper_by_url(paper_url, truncate_abstract=False)
+            paper = await searcher.get_paper_by_identifier(callback_type, callback_value, user_id)
 
         if paper:
             processing_msg = await callback.message.answer(
