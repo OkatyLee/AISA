@@ -15,7 +15,7 @@ class InputValidator:
             r'@[a-zA-Z0-9_]+',  # Mentions
             r'https?://[^\s]+',  # URLs (кроме научных)
             r'#[a-zA-Z0-9_]+',  # Hashtags
-            r'[+]?[0-9]{1,3}[-.\s]?[0-9]{1,4}[-.\s]?[0-9]{1,4}[-.\s]?[0-9]{1,9}',  # Phone numbers
+            #r'[+]?[0-9]{1,3}[-.\s]?[0-9]{1,4}[-.\s]?[0-9]{1,4}[-.\s]?[0-9]{1,9}',  # Phone numbers
             r'\b(?:\d{1,3}\.){3}\d{1,3}\b',  # IP addresses
             r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}'  # Email addresses
         ]

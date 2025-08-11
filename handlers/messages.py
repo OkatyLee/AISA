@@ -1,6 +1,7 @@
 from aiogram import Dispatcher, F
 from aiogram.types import Message
 from config.messages import COMMAND_MESSAGES
+from services.utils.search_utils import SearchUtils
 from utils.validators import InputValidator
 from nlp.query_processor import QueryProcessingResult, QueryProcessor
 from nlp.context_manager import ContextManager
@@ -12,7 +13,10 @@ from .search_commands import extract_search_filters
 validator = InputValidator()
 query_processor = QueryProcessor()
 context_manager = ContextManager("db/scientific_assistant.db")
-logger = setup_logger(__name__)
+logger = setup_logger(
+    name='messages_logger',
+    level='DEBUG'
+)
 
 def register_message_handlers(dp: Dispatcher):
     
@@ -90,7 +94,7 @@ async def _handle_search_intent(message: Message, params: dict) -> str:
     Returns:
         str: Текст ответа бота
     """
-    print(params)
+    logger.debug(f"Обработка намерения поиска с параметрами: {params}")
     try:
         if "query" in params:
             query = params["query"]
@@ -181,8 +185,6 @@ async def _handle_help_intent(message: Message) -> str:
     response = COMMAND_MESSAGES.get("help_text", "Я могу помочь вам с поиском и сохранением статей. Вот список доступных команд:")
     await message.answer(response)
     return response
-    response = COMMAND_MESSAGES.get("help_text", "Я могу помочь вам с поиском и сохранением статей. Вот список доступных команд:")
-    await message.answer(response)
 
 async def _handle_list_saved_intent(message: Message) -> str:
     """Обрабатывает запрос списка сохраненных статей."""
@@ -199,14 +201,93 @@ async def _handle_list_saved_intent(message: Message) -> str:
 async def _handle_summary_intent(message: Message, params: dict) -> str:
     """
     Обрабатывает запрос резюме.
-    TODO: Реализовать логику получения резюме статьи. Пока заглушка
+    Поддерживает: URL, DOI, arXiv ID, PubMed ID, IEEE ID или свободный текст с ссылкой/ID.
     """
-    response = (
-        "Пока функционал получения резюме статьи из общения с ботом не реализован. "
-        "📝 Для получения резюме статьи найдите ее в библиотеке или в поиске /search."
-    )
-    await message.answer(response)
-    return response
+    try:
+        from services.search import SearchService
+        from services.nlp import LLMService
+        from services.utils.paper import Paper
+        from nlp.entity_classifier import RuleBasedEntityExtractor
+        from utils.nlu.intents import Intent as _Intent
+
+        user_id = message.from_user.id
+        identifier = None
+        id_type = None
+
+        # Приоритет: явные поля в params, затем попытка извлечения из сырого текста
+        for key in ["url", "doi", "arxiv_id", "pubmed_id", "ieee_id"]:
+            if key in params and params[key]:
+                identifier = params[key]
+                id_type = key
+                break
+
+        raw_text = params.get("query")
+        if not identifier and raw_text:
+            # Попробуем извлечь идентификатор напрямую из текста
+            extractor = RuleBasedEntityExtractor()
+            extracted = await extractor.extract(raw_text, _Intent.GET_SUMMARY)
+            for e in extracted.entities:
+                if e.type.value in ["url", "doi", "arxiv_id", "pubmed_id", "ieee_id"]:
+                    identifier = e.normalized_value or e.value
+                    id_type = e.type.value
+                    break
+
+        if not identifier:
+            # Попробуем использовать текущую статью из последнего активного поиска (пагинация)
+            try:
+                current_paper = SearchUtils.get_current_paper_for_user(user_id)
+            except Exception:
+                current_paper = None
+            if current_paper:
+                processing_msg = await message.answer("⏳ Суммаризирую текущую выбранную статью…")
+                async with LLMService() as llm_service:
+                    try:
+                        summary = await llm_service.summarize(current_paper)
+                    finally:
+                        try:
+                            await processing_msg.delete()
+                        except Exception:
+                            pass
+                await message.answer(summary, parse_mode="Markdown")
+                return "Суммаризация завершена"
+            # Если и в пагинации ничего нет — просим указать ссылку/ID
+            response = (
+                "Чтобы сделать резюме, пришлите ссылку на статью или укажите её DOI/ID (arXiv, PubMed, IEEE)."
+            )
+            await message.answer(response)
+            return response
+
+        # Получаем статью по идентификатору
+        async with SearchService() as searcher:
+            # Маппинг типов id для метода get_paper_by_identifier
+            type_map = {
+                "url": "url",
+                "doi": "doi",
+                "arxiv_id": "arxiv",
+                "pubmed_id": "pubmed",
+                "ieee_id": "ieee",
+            }
+            callback_type = type_map.get(id_type, "url")
+            paper = await searcher.get_paper_by_identifier(callback_type, str(identifier), user_id)
+
+        if not paper:
+            response = "❌ Не удалось найти статью по указанной ссылке/ID."
+            await message.answer(response)
+            return response
+
+        processing_msg = await message.answer("⏳ Суммаризирую статью, это может занять некоторое время…")
+        async with LLMService() as llm_service:
+            summary = await llm_service.summarize(paper)
+        if processing_msg:
+            try:
+                await processing_msg.delete()
+            except Exception:
+                pass
+        await message.answer(summary, parse_mode="Markdown")
+        return "Суммаризация завершена"
+    except Exception as e:
+        await ErrorHandler.handle_summarization_error(message, e)
+        return "Произошла ошибка при суммаризации"
 
 async def _handle_unknown_intent(message: Message, result) -> str:
     """Обрабатывает неопознанное намерение."""

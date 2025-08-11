@@ -94,6 +94,16 @@ class QueryProcessor:
                 params["min_citations"] = entity.value
             elif entity.type.value == "journal":
                 params["journal"] = entity.value
+            elif entity.type.value == "url":
+                params["url"] = entity.normalized_value or entity.value
+            elif entity.type.value == "doi":
+                params["doi"] = entity.normalized_value or entity.value
+            elif entity.type.value == "arxiv_id":
+                params["arxiv_id"] = entity.normalized_value or entity.value
+            elif entity.type.value == "pubmed_id":
+                params["pubmed_id"] = entity.normalized_value or entity.value
+            elif entity.type.value == "ieee_id":
+                params["ieee_id"] = entity.normalized_value or entity.value
         
         # Дополнительные параметры в зависимости от намерения
         if intent.intent == Intent.SEARCH:
@@ -107,6 +117,9 @@ class QueryProcessor:
             params["action"] = "list_saved"
         elif intent.intent == Intent.GET_SUMMARY:
             params["action"] = "summary"
+            # Если нет явного идентификатора, оставим сырой текст (может содержать URL/ID)
+            if not any(k in params for k in ["url", "doi", "arxiv_id", "pubmed_id", "ieee_id"]):
+                params["query"] = entities.raw_text
         elif intent.intent == Intent.HELP:
             params["action"] = "help"
         elif intent.intent == Intent.GREETING:

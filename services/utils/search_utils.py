@@ -11,6 +11,7 @@ from aiogram.utils.markdown import hbold, hitalic, hlink
 from services.utils.paper import Paper
 import json
 import hashlib
+import time
 
 logger = setup_logger(
     name="search_commands_logger",
@@ -109,7 +110,9 @@ class SearchUtils:
             'query': query,
             'saved_urls': saved_urls,
             'saved_index': None,  # будет заполнен при первом рендере
-            'user_id': user_id
+            'user_id': user_id,
+            'current_page': 0,
+            'last_updated': time.time(),
         }
         
         return search_id
@@ -121,10 +124,11 @@ class SearchUtils:
             if isinstance(message_or_callback, CallbackQuery):
                 await message_or_callback.answer("❌ Результаты поиска устарели. Выполните поиск заново.")
             return
-            
+
         search_data = SearchUtils._search_cache[search_id]
         papers = search_data['papers']
         query = search_data['query']
+
         # Всегда обновляем список сохранённых статей из БД, чтобы состояние кнопок было актуальным
         try:
             fresh_index = await SearchUtils._get_user_saved_index(search_data['user_id'])
@@ -134,35 +138,35 @@ class SearchUtils:
             logger.debug(f"Не удалось обновить saved_urls из БД: {e}")
         saved_urls = search_data['saved_urls']
         saved_index = search_data.get('saved_index')
-        
-        papers_per_page = 1
+
         total_pages = len(papers)
-        
         if page >= total_pages or page < 0:
             if isinstance(message_or_callback, CallbackQuery):
                 await message_or_callback.answer("❌ Страница не найдена")
             return
-            
+
         current_paper = papers[page]
-        
+        # Обновляем информацию о текущей странице и времени активности
+        search_data['current_page'] = page
+        search_data['last_updated'] = time.time()
+
         # Форматируем сообщение (используем HTML разметку корректно)
         header = f"📚 Результат {page + 1} из {total_pages} по запросу: <b>{query}</b>\n\n"
         paper_message = SearchUtils.format_paper_message(current_paper, page + 1)
-        # format_paper_message возвращает HTML (hbold = <b>, hitalic = <i>, hlink = <a>)
+        # format_paper_message возвращает HTML
         full_message = header + paper_message
 
-        # Если редактируем и текст идентичен предыдущему – добавим zero-width space, чтобы избежать ошибки Telegram
-        old_text = None
+        # Если редактируем и текст идентичен предыдущему – добавим zero-width space
         if isinstance(message_or_callback, CallbackQuery) and edit_message:
             old_text = message_or_callback.message.text or ""
             if old_text == full_message:
-                full_message += "\u200b"  # невидимый символ
-        
-        # Создаем клавиатуру с кнопками навигации и действий
+                full_message += "\u200b"
+
+        # Клавиатура
         keyboard = SearchUtils._create_pagination_keyboard(
             search_id, page, total_pages, current_paper, search_data['user_id'], saved_urls, saved_index
         )
-        
+
         try:
             if isinstance(message_or_callback, CallbackQuery) and edit_message:
                 try:
@@ -174,20 +178,19 @@ class SearchUtils:
                     )
                 except TelegramBadRequest as te:
                     if "message is not modified" in str(te).lower():
-                        # Попробуем просто обновить разметку (вдруг изменилась клавиатура)
                         try:
                             await message_or_callback.message.edit_reply_markup(
                                 reply_markup=keyboard.as_markup()
                             )
                         except TelegramBadRequest:
-                            pass  # Нечего обновлять
+                            pass
                     else:
                         raise
                 if auto_answer:
                     await message_or_callback.answer()
             else:
-                message = message_or_callback if isinstance(message_or_callback, Message) else message_or_callback.message
-                await message.answer(
+                msg = message_or_callback if isinstance(message_or_callback, Message) else message_or_callback.message
+                await msg.answer(
                     full_message,
                     parse_mode="HTML",
                     reply_markup=keyboard.as_markup(),
@@ -195,6 +198,45 @@ class SearchUtils:
                 )
         except Exception as e:
             logger.error(f"Ошибка при отправке пагинированных результатов: {e}")
+
+    @staticmethod
+    def _get_last_active_search(user_id: int):
+        """Возвращает (search_id, search_data) последнего активного поиска пользователя."""
+        if not hasattr(SearchUtils, '_search_cache'):
+            return None, None
+        best_sid = None
+        best_data = None
+        best_ts = -1.0
+        for sid, data in getattr(SearchUtils, '_search_cache', {}).items():
+            try:
+                if data.get('user_id') == user_id:
+                    ts = float(data.get('last_updated') or 0)
+                    if ts > best_ts:
+                        best_ts = ts
+                        best_sid = sid
+                        best_data = data
+            except Exception:
+                continue
+        return best_sid, best_data
+
+    @staticmethod
+    def get_current_paper_for_user(user_id: int) -> Paper | None:
+        """Возвращает текущую выбранную статью из последнего активного поиска пользователя."""
+        sid, data = SearchUtils._get_last_active_search(user_id)
+        if not data:
+            return None
+        papers = data.get('papers') or []
+        if not papers:
+            return None
+        page = int(data.get('current_page') or 0)
+        if page < 0:
+            page = 0
+        if page >= len(papers):
+            page = len(papers) - 1
+        try:
+            return papers[page]
+        except Exception:
+            return None
     
     @staticmethod
     def _create_pagination_keyboard(search_id: str, page: int, total_pages: int, paper: Paper, user_id: int, saved_urls: set, saved_index: dict | None = None) -> InlineKeyboardBuilder:
@@ -298,55 +340,60 @@ class SearchUtils:
     @staticmethod
     async def _send_search_results_as_list(message_or_callback, search_id: str):
         """Отправляет результаты поиска списком (старый формат)"""
-        if not hasattr(SearchUtils, '_search_cache') or search_id not in SearchUtils._search_cache:
+        if not hasattr(SearchUtils, "_search_cache") or search_id not in SearchUtils._search_cache:
             if isinstance(message_or_callback, CallbackQuery):
                 await message_or_callback.answer("❌ Результаты поиска устарели")
             return
-            
+
         search_data = SearchUtils._search_cache[search_id]
-        papers = search_data['papers']
-        query = search_data['query']
-        saved_urls = search_data['saved_urls']
-        user_id = search_data['user_id']
-        
-        # Формируем сообщение со списком всех результатов
-        header = f"📚 Найдено {len(papers)} статей по запросу: *{query}*\n\n"
-        
-        results_text = header
-        for i, paper in enumerate(papers[:5], 1):  # Показываем только первые 5
-            title = paper.title[:100] + "..." if len(paper.title) > 100 else paper.title
-            authors = ", ".join(paper.authors[:2])
-            if len(paper.authors) > 2:
-                authors += f" и ещё {len(paper.authors) - 2}"
-            
+        papers = search_data.get("papers", [])
+        query = search_data.get("query", "")
+
+        # Формируем сообщение со списком первых 5 результатов
+        results_text = f"📚 Найдено {len(papers)} статей по запросу: *{query}*\n\n"
+
+        for i, paper in enumerate(papers[:5], start=1):
+            title = paper.title or "Без названия"
+            if len(title) > 100:
+                title = title[:100] + "..."
+            authors_list = paper.authors or []
+            authors = ", ".join(authors_list[:2])
+            if len(authors_list) > 2:
+                authors += f" и ещё {len(authors_list) - 2}"
+
             results_text += f"{i}. **{title}**\n"
-            results_text += f"   👥 {authors}\n"
+            if authors:
+                results_text += f"   👥 {authors}\n"
             if paper.url:
                 results_text += f"   🔗 [Читать статью]({paper.url})\n"
             results_text += "\n"
-        
+
         if len(papers) > 5:
             results_text += f"... и ещё {len(papers) - 5} статей\n\n"
             results_text += "💡 Используйте пагинацию для просмотра всех результатов"
-        
-        # Создаем клавиатуру для возврата к пагинации
+
+        # Клавиатура для возврата к пагинации/закрытия
         keyboard = InlineKeyboardBuilder()
-        keyboard.add(InlineKeyboardButton(
-            text="📖 Вернуться к пагинации",
-            callback_data=f"search_page:{search_id}:0"
-        ))
-        keyboard.add(InlineKeyboardButton(
-            text="❌ Закрыть результаты",
-            callback_data=f"close_search:{search_id}"
-        ))
-        
+        keyboard.add(
+            InlineKeyboardButton(
+                text="📖 Вернуться к пагинации",
+                callback_data=f"search_page:{search_id}:0",
+            )
+        )
+        keyboard.add(
+            InlineKeyboardButton(
+                text="❌ Закрыть результаты",
+                callback_data=f"close_search:{search_id}",
+            )
+        )
+
         try:
             if isinstance(message_or_callback, CallbackQuery):
                 await message_or_callback.message.edit_text(
                     results_text,
                     parse_mode="Markdown",
                     reply_markup=keyboard.as_markup(),
-                    disable_web_page_preview=True
+                    disable_web_page_preview=True,
                 )
                 await message_or_callback.answer()
             else:
@@ -354,7 +401,7 @@ class SearchUtils:
                     results_text,
                     parse_mode="Markdown",
                     reply_markup=keyboard.as_markup(),
-                    disable_web_page_preview=True
+                    disable_web_page_preview=True,
                 )
         except Exception as e:
             logger.error(f"Ошибка при отправке результатов списком: {e}")

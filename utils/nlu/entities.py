@@ -25,6 +25,12 @@ class EntityType(Enum):
     KEYWORD = "keyword"
     DATE_RANGE = "date_range"
     CITATION_COUNT = "citation_count"
+    # Новые сущности для идентификаторов статей и ссылок
+    URL = "url"
+    DOI = "doi"
+    ARXIV_ID = "arxiv_id"
+    PUBMED_ID = "pubmed_id"
+    IEEE_ID = "ieee_id"
 
 
 @dataclass

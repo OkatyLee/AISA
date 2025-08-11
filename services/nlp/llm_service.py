@@ -53,16 +53,22 @@ class LLMService:
                 - Используй научную терминологию, но объясняй сложные концепции
                 - Выделяй самые важные моменты
                 - Сохраняй объективность и точность
+                - Если у статьи короткая аннотация, суммируй аккуратно без выдумывания деталей
                 
                 Резюме должно быть понятным для широкой аудитории, но сохранять научную точность."""
             paper = paper.to_dict() if isinstance(paper, Paper) else paper
+            if not isinstance(paper, dict):
+                raise ValueError("Неверный формат статьи для суммаризации")
+            abstract_text = paper.get('abstract', '') or ''
+            title_text = paper.get('title', 'Название статьи не указано')
+            authors_list = paper.get('authors', []) or []
             user_prompt = f"""Пожалуйста, суммаризируй следующую научную статью:
 
-                Название: {paper.get('title', 'Название статьи не указано')}
-                Авторы: {', '.join(paper.get('authors', ['Автор не указан']))}
+                Название: {title_text}
+                Авторы: {', '.join(authors_list) if authors_list else 'Автор не указан'}
 
                 Содержание статьи:
-                {paper.get('abstract', '')[:163000]} 
+                {abstract_text[:163000]} 
             """
             completion = await self.llm_client.chat.completions.create(
                 model="tngtech/deepseek-r1t2-chimera:free",

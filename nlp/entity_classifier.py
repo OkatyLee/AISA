@@ -49,7 +49,27 @@ class RuleBasedEntityExtractor:
                 re.compile(r'более (\d+) цитирований'),
                 re.compile(r'больше (\d+) раз цитируем'),
                 re.compile(r'цитируем[ыхао]+ более (\d+)')
-            ]
+            ],
+            # URL и идентификаторы
+            EntityType.URL: [
+                re.compile(r'(https?://\S+)', re.IGNORECASE),
+            ],
+            EntityType.DOI: [
+                # doi:10.1000/xyz123 или просто 10.1000/xyz123
+                re.compile(r'(?:doi\s*[:]?\s*)?(10\.\d{4,9}/[-._;()/:A-Z0-9]+)', re.IGNORECASE),
+            ],
+            EntityType.ARXIV_ID: [
+                # arXiv:2401.12345 или 2401.12345
+                re.compile(r'(?:arxiv\s*[:]?\s*)?(\d{4}\.\d{4,5})(?:v\d+)?', re.IGNORECASE),
+            ],
+            EntityType.PUBMED_ID: [
+                # PMID: 12345678 или pubmed 12345678
+                re.compile(r'(?:pmid|pubmed)\s*[:]?\s*(\d{5,9})', re.IGNORECASE),
+            ],
+            EntityType.IEEE_ID: [
+                # IEEE document id
+                re.compile(r'(?:ieee|document)\s*[:#]?\s*(\d{5,9})', re.IGNORECASE),
+            ],
         }
     
     def _load_academic_keywords(self) -> List[str]:
@@ -108,8 +128,8 @@ class RuleBasedEntityExtractor:
         return entities
     
     async def extract(self, text: str, intent: Intent) -> EntityExtractionResult:
-        entities = []
-        
+        entities: List[Entity] = []
+
         # Извлекаем сущности по паттернам
         for entity_type, patterns in self.patterns.items():
             for pattern in patterns:
@@ -122,20 +142,17 @@ class RuleBasedEntityExtractor:
                         start_pos=match.start(),
                         end_pos=match.end()
                     )
-                    
                     # Нормализация значений
                     entity.normalized_value = self._normalize_entity(entity)
                     entities.append(entity)
-        
-        # Извлекаем топики по словарю
+
+        # Извлекаем топики и авторов по словарю
         entities.extend(self._extract_topics_by_dictionary(text))
-        
-        # Извлекаем авторов по словарю
         entities.extend(self._extract_authors_by_dictionary(text))
-        
+
         # Постобработка и дедупликация
         entities = self._post_process_entities(entities)
-        
+
         return EntityExtractionResult(entities=entities, raw_text=text)
     
     def _extract_topics_by_dictionary(self, text: str) -> List[Entity]:
@@ -203,6 +220,27 @@ class RuleBasedEntityExtractor:
             return entity.value.title().strip()
         
         elif entity.type == EntityType.CITATION_COUNT:
+            try:
+                return int(entity.value)
+            except ValueError:
+                return None
+
+        elif entity.type == EntityType.URL:
+            return entity.value.strip()
+
+        elif entity.type == EntityType.DOI:
+            return entity.value.strip().lower()
+
+        elif entity.type == EntityType.ARXIV_ID:
+            return entity.value.strip()
+
+        elif entity.type == EntityType.PUBMED_ID:
+            try:
+                return int(entity.value)
+            except ValueError:
+                return None
+
+        elif entity.type == EntityType.IEEE_ID:
             try:
                 return int(entity.value)
             except ValueError:
