@@ -47,7 +47,7 @@ class Paper:
             "authors": self.authors,
             "abstract": self.abstract,
             "doi": self.doi,
-            "publication_date": dateutil.parser.parse(self.publication_date).isoformat(timespec='hours') if self.publication_date else None,
+            "publication_date": self.publication_date,
             "journal": self.journal,
             "keywords": self.keywords,
             "url": self.url,

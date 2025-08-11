@@ -207,7 +207,7 @@ class LibraryApp {
         } else {
             this.filteredPapers = this.allPapers.filter(paper => 
                 paper.title.toLowerCase().includes(searchTerm) ||
-                paper.authors.toLowerCase().includes(searchTerm) ||
+                paper.authors.join(', ').toLowerCase().includes(searchTerm) ||
                 paper.abstract.toLowerCase().includes(searchTerm)
             );
         }
@@ -338,11 +338,11 @@ class LibraryApp {
             
             <div style="margin-bottom: 16px;">
                 <strong>Аннотация:</strong><br>
-                <p style="margin-top: 8px; line-height: 1.6;">${this.escapeHtml(paper.abstract)}</p>
+                <p style="margin-top: 8px; line-height: 1.6;">${paper.abstract}</p>
             </div>
             
-            ${paper.arxiv_id ? `<div style="margin-bottom: 16px;">
-                <strong>ArXiv ID:</strong> ${paper.arxiv_id}
+            ${paper.external_id ? `<div style="margin-bottom: 16px;">
+                <strong>${paper.source} ID:</strong> ${paper.external_id}
             </div>` : ''}
         `;
         

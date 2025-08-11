@@ -127,6 +127,7 @@ class NCBISearcher(PaperSearcher):
             pmid_elem = medline_citation.find('PMID')
             if pmid_elem is not None:
                 paper.external_id = pmid_elem.text
+            paper.source = 'NCBI'
             
             # Заголовок
             title_elem = medline_citation.find('.//ArticleTitle')

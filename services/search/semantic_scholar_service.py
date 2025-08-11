@@ -5,7 +5,7 @@ from services.utils.paper import Paper, PaperSearcher
 import httpx
 from dateutil.parser import parse
 from typing import List, Dict, Any, Optional
-from utils.error_handler import ErrorHandler
+import re
 from utils.logger import setup_logger
 import asyncio
 import time
@@ -18,6 +18,7 @@ class SemanticScholarSearcher(PaperSearcher):
 
     BASE_URL = "https://api.semanticscholar.org/graph/v1"
     FIELD = "title,authors,abstract,publicationDate,journal,venue,url,externalIds"
+    DOI_REGEX = re.compile(r'^(10\.\d{4,9}/[-._;()/:A-Z0-9]+)$', re.IGNORECASE)
 
     def __init__(self):
         self._client: Optional[httpx.AsyncClient] = None
@@ -175,34 +176,49 @@ class SemanticScholarSearcher(PaperSearcher):
         self._last_call_ts = time.monotonic()
         
     async def search_papers(self, query, limit = 10, filters = None):
-        url = f"{self.BASE_URL}/paper/search"
-        if limit > 1:
-            url += f"/bulk"
-        allowed_filters = {}
-        if filters:
-            for k in ("offset", "year", "yearFilter", "fieldsOfStudy", "venue"):
-                if k in filters:
-                    allowed_filters[k] = filters[k]
-        params = {
-            "query": query,
-            "limit": limit,
-            "fields": self.FIELD,
-            **(allowed_filters or {})
-        }
-        try:
-            papers_json = await self._make_request(url, params=params)
-        except Exception as e:
-            logger.error(f"Error occurred while searching papers: {e}")
-            return []
-        try:
-            papers = []
-            for paper_data in papers_json.get("data", []):
+        is_doi = self.DOI_REGEX.match(query)
+        if is_doi:
+            logger.info(f'Выполняем поиск по DOI {query}')
+            paper_id = f'DOI:{query}'
+            url = f"{self.BASE_URL}/paper/{paper_id}"
+            params = {"fields" : self.FIELD}
+            try:
+                paper_data = await self._make_request(url, params)
+                if "error" in paper_data:
+                     logger.warning(f"Could not find paper with DOI: {query}. API response: {paper_data.get('body')}")
+                     return []
                 paper = self._parse_paper_data(paper_data)
-                papers.append(paper)
-            return papers
-        except Exception as e:
-            logger.error(f"Error occurred while parsing papers: {e}")
-            return []
+                return [paper]
+            except Exception as e:
+                logger.error(f"Error occurred while searching paper by DOI {query}: {e}")
+                return []
+        else:
+            url = f"{self.BASE_URL}/paper/search"
+
+            params = {
+                "query": query,
+                "limit": limit,
+                "fields": self.FIELD,
+            }
+            
+            if filters:
+                for k in ("offset", "year", "yearFilter", "fieldsOfStudy", "venue"):
+                    if k in filters:
+                        params[k] = filters[k]
+            
+            try:
+                papers_json = await self._make_request(url, params=params)
+                if "error" in papers_json or "data" not in papers_json:
+                    return []
+                papers = []
+
+                for paper_data in papers_json.get("data", []):
+                    paper = self._parse_paper_data(paper_data)
+                    papers.append(paper)
+                return papers
+            except Exception as e:
+                logger.error(f"Error occurred while searching papers: {e}")
+                return []
         
     def _extract_paper_id_from_url(self, url: str) -> Optional[str]:
         """

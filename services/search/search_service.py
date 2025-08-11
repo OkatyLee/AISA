@@ -470,7 +470,7 @@ class SearchService:
             ss_service = self._services['semantic_scholar']
             # Ищем статью по DOI через Semantic Scholar
             async with ss_service:
-                results = await ss_service.search_papers(f"DOI:{doi}", limit=1)
+                results = await ss_service.search_papers(doi, limit=1)
                 if results:
                     return results[0]
                 return None
@@ -553,11 +553,11 @@ class SearchService:
         try:
             if callback_type == 'arxiv':
                 return await self.get_arxiv_paper_by_id(callback_value)
-            elif callback_type == 'pubmed':
+            elif callback_type == 'pubmed' or callback_type.lower() == 'ncbi':
                 return await self.get_pubmed_paper_by_id(callback_value)
             elif callback_type == 'ieee':
                 return await self.get_ieee_paper_by_id(callback_value)
-            elif callback_type == 'doi' or callback_type == 'semantic_scholar':
+            elif callback_type == 'doi':
                 return await self.get_paper_by_doi(callback_value)
             elif callback_type == 'url':
                 return await self.get_paper_by_url_part(callback_value)

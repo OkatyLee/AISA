@@ -84,7 +84,6 @@ class DatabaseManager:
         try:
             with sqlite3.connect(self.db_path) as conn:
                 cursor = conn.cursor()
-                print('зашли в save_paper')
                 cursor.execute(
                     '''
                     SELECT id FROM saved_publications

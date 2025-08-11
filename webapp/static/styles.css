@@ -36,10 +36,12 @@ body {
 }
 
 #app {
-    max-width: 600px;
+    max-width: 900px;
     margin: 0 auto;
     padding: 16px;
+    padding: 24px 32px;
     min-height: 100vh;
+    transition: max-width 0.3s, padding 0.3s;
 }
 
 /* Заголовок */
@@ -439,5 +441,45 @@ body {
     .modal-content {
         margin: 10px;
         max-height: 90vh;
+    }
+}
+
+@media (min-width: 900px) {
+    #app {
+        max-width: 1100px;
+        padding: 32px 64px;
+    }
+    .header h1 {
+        font-size: 2.2rem;
+    }
+    .filters {
+        gap: 32px;
+        margin-bottom: 32px;
+    }
+    .filter-select {
+        font-size: 1.1rem;
+        padding: 14px 18px;
+    }
+    .search-input {
+        font-size: 1.1rem;
+        padding: 16px 22px;
+    }
+    .paper-card {
+        padding: 32px;
+        font-size: 1.05rem;
+    }
+    .modal-content {
+        max-width: 700px;
+        padding: 0 24px;
+    }
+    .modal-header h2 {
+        font-size: 1.5rem;
+    }
+    .modal-body {
+        font-size: 1.1rem;
+    }
+    .primary-btn, .page-btn {
+        font-size: 1.1rem;
+        padding: 16px 32px;
     }
 }

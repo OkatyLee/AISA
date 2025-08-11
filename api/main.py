@@ -179,10 +179,12 @@ async def get_user_library(
                 "authors": paper.get("authors", "Неизвестные авторы"),
                 "abstract": paper.get("abstract", "Аннотация не найдена"),
                 "url": paper.get("url", ""),
-                "published_date": paper.get("published_date", ""),
+                "publication_date": paper.get("publication_date", ""),
                 "saved_at": paper.get("saved_at", ""),
                 "categories": paper.get("categories", []),
-                "arxiv_id": paper.get("arxiv_id", "")
+                "external_id": paper.get("external_id", ""),
+                "source": paper.get("source", "Неизвестный источник"),
+                
             })
         
         return UserLibrary(

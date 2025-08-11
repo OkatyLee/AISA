@@ -10,6 +10,8 @@ from aiogram import types
 from aiogram import Dispatcher
 from utils import setup_logger
 import logging
+import re
+from services.utils.search_utils import SearchUtils
 
 logger = setup_logger(
     name="library_logger",
@@ -52,34 +54,128 @@ async def handle_save_paper(callback: CallbackQuery, **kwargs):
         if len(parts) < 3:
             await callback.answer("❌ Неверный формат данных")
             return
-            
-        callback_type = parts[1]  # source, url, hash
-        callback_value = parts[2]  # actual id/value
-        
+
+        callback_type = parts[1]
+        callback_value = parts[2]
         user_id = callback.from_user.id
-        print("пытаемся найти статью")
+        logger.debug(f"{callback_type} {callback_value}")
         # Получаем статью, заново запрашивая ее по ID
         paper = None
         async with SearchService() as searcher:
             paper = await searcher.get_paper_by_identifier(callback_type, callback_value, user_id)
-        print("нашли статью")
         if not paper:
             await callback.answer("❌ Не удалось найти данные статьи для сохранения.")
             return
+
         paper_dict = paper.to_dict() if isinstance(paper, Paper) else paper
-        print('заходим в save_paper')
         success = await db.save_paper(user_id, paper_dict)
-        print('выход из save_paper')
-        if success:
-            await callback.message.edit_reply_markup(
-                reply_markup=create_paper_keyboard(
-                    paper, user_id, is_saved=True
-                ).as_markup()
+
+        if not success:
+            # Уже сохранена – всё равно обновим пагинацию, если это поиск, чтобы кнопка сменилась
+            is_paginated_search = callback.message.text.startswith("📚 Результат") if callback.message.text else False
+            if is_paginated_search:
+                # Переиспользуем логику определения страницы / search_id из ниже, но минимально
+                current_page_index = None
+                search_id = None
+                m = re.search(r"Результат (\d+) из (\d+)", callback.message.text)
+                if m:
+                    try:
+                        current_page_index = int(m.group(1)) - 1
+                    except ValueError:
+                        current_page_index = None
+                if callback.message.reply_markup:
+                    try:
+                        for row in callback.message.reply_markup.inline_keyboard:
+                            for btn in row:
+                                data = getattr(btn, 'callback_data', '') or ''
+                                if data.startswith('search_page:'):
+                                    parts_btn = data.split(':')
+                                    if len(parts_btn) == 3:
+                                        search_id = parts_btn[1]
+                                        break
+                                elif data.startswith('show_list:') and not search_id:
+                                    parts_btn = data.split(':')
+                                    if len(parts_btn) == 2:
+                                        search_id = parts_btn[1]
+                            if search_id:
+                                break
+                    except Exception:
+                        pass
+                if search_id and current_page_index is not None:
+                    await SearchUtils._send_paginated_results(
+                        callback, search_id, current_page_index, edit_message=True, auto_answer=False
+                    )
+                    await callback.answer("✅ Статья уже сохранена")
+                    return
+            await callback.answer("✅ Статья уже сохранена в библиотеке")
+            return
+
+        # Определяем, относится ли сообщение к пагинированным результатам поиска
+        is_paginated_search = False
+        current_page_index = None
+        search_id = None
+
+        message_text = callback.message.text or ""
+        if message_text.startswith("📚 Результат"):
+            # Пытаемся вытащить номер текущей страницы
+            m = re.search(r"Результат (\d+) из (\d+)", message_text)
+            if m:
+                try:
+                    current_page = int(m.group(1))
+                    total_pages = int(m.group(2))  # noqa: F841 (может пригодиться позже)
+                    current_page_index = current_page - 1
+                    is_paginated_search = True
+                except ValueError:
+                    pass
+
+        # Если навигация есть в reply_markup, извлекаем search_id
+        if is_paginated_search and callback.message.reply_markup:
+            try:
+                for row in callback.message.reply_markup.inline_keyboard:
+                    for btn in row:
+                        data = getattr(btn, 'callback_data', '') or ''
+                        if data.startswith('search_page:'):
+                            # Формат: search_page:search_id:page
+                            parts_btn = data.split(':')
+                            if len(parts_btn) == 3:
+                                search_id = parts_btn[1]
+                                break
+                        elif data.startswith('show_list:') and not search_id:
+                            # Формат: show_list:search_id
+                            parts_btn = data.split(':')
+                            if len(parts_btn) == 2:
+                                search_id = parts_btn[1]
+                    if search_id:
+                        break
+            except Exception as ex:
+                logger.debug(f"Не удалось извлечь search_id из клавиатуры: {ex}")
+
+        # Если это пагинированный поиск и удалось определить search_id и страницу — перерисовываем через SearchUtils
+        if is_paginated_search and search_id is not None and current_page_index is not None:
+            # Обновляем кэш: добавляем url в saved_urls, чтобы кнопка сменилась на 'Удалить'
+            if hasattr(SearchUtils, '_search_cache') and search_id in getattr(SearchUtils, '_search_cache'):
+                try:
+                    cache_entry = SearchUtils._search_cache[search_id]
+                    if paper.url:
+                        cache_entry['saved_urls'].add(paper.url)
+                except Exception as ex:
+                    logger.debug(f"Не удалось обновить saved_urls в кэше: {ex}")
+
+            # Перерисовываем текущую страницу с обновленной клавиатурой
+            await SearchUtils._send_paginated_results(
+                callback, search_id, current_page_index, edit_message=True, auto_answer=False
             )
             await callback.answer("✅ Статья сохранена в библиотеку!")
-        else:
-            await callback.answer("❌ Статья уже сохранена в библиотеке")
-            
+            return
+
+        # Иначе (не пагинация) — поведение по-старому: заменяем клавиатуру
+        await callback.message.edit_reply_markup(
+            reply_markup=create_paper_keyboard(
+                paper, user_id, is_saved=True
+            ).as_markup()
+        )
+        await callback.answer("✅ Статья сохранена в библиотеку!")
+
     except Exception as e:
         logger.error(f"Ошибка при сохранении статьи: {e}")
         await callback.answer("❌ Ошибка при сохранении статьи")
@@ -141,7 +237,7 @@ async def handle_library_stats(callback: CallbackQuery, **kwargs):
         await callback.answer("❌ Ошибка при получении статистики")
 
 
-@track_operation("library_delete")  
+@track_operation("library_delete")
 async def handle_library_delete(callback: CallbackQuery, **kwargs):
     """Обработчик удаления статьи из библиотеки"""
     try:
@@ -150,36 +246,80 @@ async def handle_library_delete(callback: CallbackQuery, **kwargs):
         if len(parts) < 3:
             await callback.answer("❌ Неверный формат данных")
             return
-            
+
         callback_type = parts[1]  # source, url, hash
         callback_value = parts[2]  # actual id/value
-        
         user_id = callback.from_user.id
-        
+
         # Удаляем статью из библиотеки по callback данным
-        # В зависимости от типа callback данных используем разные методы поиска
         success = False
-        
         if callback_type in ['arxiv', 'pubmed', 'ieee', 'doi']:
-            # Поиск по внешнему ID и источнику
             success = await db.delete_paper_by_external_id(user_id, callback_value, callback_type)
         elif callback_type == 'url':
-            # Поиск по части URL
             success = await db.delete_paper_by_url_part(user_id, callback_value)
         elif callback_type == 'hash':
-            # Поиск по хешу заголовка
             success = await db.delete_paper_by_title_hash(user_id, callback_value)
-        
-        if success:
-            await callback.answer("✅ Статья удалена из библиотеки")
-            # Обновляем сообщение, убираем кнопки
-            await callback.message.edit_text(
-                callback.message.text + "\n\n❌ Статья удалена из библиотеки",
-                parse_mode="Markdown"
-            )
-        else:
+
+        if not success:
             await callback.answer("❌ Ошибка при удалении статьи")
-            
+            return
+
+        # Определяем, относится ли сообщение к пагинированным результатам поиска
+        is_paginated_search = False
+        current_page_index = None
+        search_id = None
+        message_text = callback.message.text or ""
+        if message_text.startswith("📚 Результат"):
+            m = re.search(r"Результат (\d+) из (\d+)", message_text)
+            if m:
+                try:
+                    current_page_index = int(m.group(1)) - 1
+                    is_paginated_search = True
+                except ValueError:
+                    current_page_index = None
+
+        if is_paginated_search and callback.message.reply_markup:
+            try:
+                for row in callback.message.reply_markup.inline_keyboard:
+                    for btn in row:
+                        data = getattr(btn, 'callback_data', '') or ''
+                        if data.startswith('search_page:'):
+                            parts_btn = data.split(':')
+                            if len(parts_btn) == 3:
+                                search_id = parts_btn[1]
+                                break
+                        elif data.startswith('show_list:') and not search_id:
+                            parts_btn = data.split(':')
+                            if len(parts_btn) == 2:
+                                search_id = parts_btn[1]
+                    if search_id:
+                        break
+            except Exception:
+                pass
+
+        if is_paginated_search and search_id is not None and current_page_index is not None:
+            # Перерисовываем текущую страницу с обновленной клавиатурой (кнопка станет «Сохранить»)
+            from services.utils.search_utils import SearchUtils as _SU
+            await _SU._send_paginated_results(
+                callback, search_id, current_page_index, edit_message=True, auto_answer=False
+            )
+            await callback.answer("✅ Статья удалена из библиотеки")
+            return
+
+        # Иначе (не пагинация): обновляем только клавиатуру, не удаляя кнопки
+        try:
+            paper = None
+            async with SearchService() as searcher:
+                paper = await searcher.get_paper_by_identifier(callback_type, callback_value, user_id)
+            if paper:
+                await callback.message.edit_reply_markup(
+                    reply_markup=create_paper_keyboard(paper, user_id, is_saved=False).as_markup()
+                )
+            await callback.answer("✅ Статья удалена из библиотеки")
+        except Exception:
+            # В крайнем случае просто ответим, не ломая сообщение
+            await callback.answer("✅ Статья удалена из библиотеки")
+
     except Exception as e:
         logger.error(f"Ошибка при удалении статьи из библиотеки: {e}")
         await callback.answer("❌ Ошибка при удалении статьи")
@@ -236,7 +376,7 @@ async def handle_summary(callback: CallbackQuery, **kwargs):
         logger.debug(f"Получение статьи по {callback_type} с ID {callback_value} для пользователя {user_id}")
         async with SearchService() as searcher:
             paper = await searcher.get_paper_by_identifier(callback_type, callback_value, user_id)
-
+        print(paper)
         if paper:
             processing_msg = await callback.message.answer(
                 "⏳ Суммаризирую статью, это может занять некоторое время..."
