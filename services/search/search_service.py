@@ -4,6 +4,8 @@ import re
 from typing import List, Dict, Any, Optional
 
 from dateutil.parser import parse
+from numpy import full
+from regex import W
 
 from services.search.semantic_scholar_service import SemanticScholarSearcher
 from services.utils import paper
@@ -321,8 +323,8 @@ class SearchService:
             key = None
             
             # Приоритет: DOI > URL > нормализованное название
-            if paper.doi:
-                key = ('doi', paper.doi.lower())
+            if paper.external_id:
+                key = ('external_id', paper.external_id.lower())
             elif paper.url:
                 key = ('url', paper.url.lower())
             elif paper.title:
@@ -333,14 +335,14 @@ class SearchService:
             if key and key not in seen:
                 seen.add(key)
                 unique_papers.append(paper)
+            else:
+                print(f"Пропущена дублирующаяся статья: {paper.title} {paper.external_id} ({key})")
         
         return unique_papers
 
     def _sort_papers(self, papers: List[Paper], query: str, sort_by: str) -> List[Paper]:
         """Сортировать статьи по заданному критерию."""
-        print('enter sorting')
         query_words = set(query.lower().split())
-        print(query_words)
         for paper in papers:
             score = 0
             
@@ -378,7 +380,6 @@ class SearchService:
                     score += (5 - years_ago) * 0.1
             logger.debug(f'Paper {paper.title} has semantic score: {score}')
             paper.semantic_score = score
-        print('exit sorting')
         return sorted(papers, key=lambda p: p.semantic_score, reverse=True)
 
     def get_search_statistics(self, search_results: Dict[str, SearchResult]) -> Dict[str, Any]:
@@ -411,7 +412,7 @@ class SearchService:
         
         return stats
     
-    async def get_arxiv_paper_by_id(self, arxiv_id: str) -> Optional[Paper]:
+    async def get_arxiv_paper_by_id(self, arxiv_id: str, full_text: bool=False) -> Optional[Paper]:
         """Получает статью ArXiv по ID."""
         if 'arxiv' not in self._services:
             logger.warning("ArXiv сервис недоступен")
@@ -419,15 +420,19 @@ class SearchService:
             
         try:
             arxiv_service = self._services['arxiv']
-            # Создаем URL для ArXiv статьи
-            arxiv_url = f"https://arxiv.org/abs/{arxiv_id}"
             async with arxiv_service:
+            
+                if full_text:
+                    # Получаем полную версию статьи
+                    return await arxiv_service.get_full_text_by_id(arxiv_id)
+                # Создаем URL для ArXiv статьи
+                arxiv_url = f"https://arxiv.org/abs/{arxiv_id}"
                 return await arxiv_service.get_paper_by_url(arxiv_url)
         except Exception as e:
             logger.error(f"Ошибка при получении ArXiv статьи {arxiv_id}: {e}")
             return None
     
-    async def get_pubmed_paper_by_id(self, pubmed_id: str) -> Optional[Paper]:
+    async def get_pubmed_paper_by_id(self, pubmed_id: str, full_text: bool = False) -> Optional[Paper]:
         """Получает статью PubMed по ID."""
         if 'ncbi' not in self._services:
             logger.warning("NCBI сервис недоступен")
@@ -435,15 +440,19 @@ class SearchService:
             
         try:
             ncbi_service = self._services['ncbi']
-            # Создаем URL для PubMed статьи
-            pubmed_url = f"https://pubmed.ncbi.nlm.nih.gov/{pubmed_id}/"
             async with ncbi_service:
+            
+                if full_text:
+                    # Получаем полную версию статьи
+                    return await ncbi_service.get_full_text_by_id(pubmed_id)
+                # Создаем URL для PubMed статьи
+                pubmed_url = f"https://pubmed.ncbi.nlm.nih.gov/{pubmed_id}/"
                 return await ncbi_service.get_paper_by_url(pubmed_url)
         except Exception as e:
             logger.error(f"Ошибка при получении PubMed статьи {pubmed_id}: {e}")
             return None
     
-    async def get_ieee_paper_by_id(self, ieee_id: str) -> Optional[Paper]:
+    async def get_ieee_paper_by_id(self, ieee_id: str, full_text: bool = False) -> Optional[Paper]:
         """Получает статью IEEE по ID."""
         if 'ieee' not in self._services:
             logger.warning("IEEE сервис недоступен")
@@ -451,15 +460,19 @@ class SearchService:
             
         try:
             ieee_service = self._services['ieee']
-            # Создаем URL для IEEE статьи
-            ieee_url = f"https://ieeexplore.ieee.org/document/{ieee_id}"
             async with ieee_service:
+            
+                if full_text:
+                    # Получаем полную версию статьи
+                    return await ieee_service.get_full_text_by_id(ieee_id)
+                # Создаем URL для IEEE статьи
+                ieee_url = f"https://ieeexplore.ieee.org/document/{ieee_id}"
                 return await ieee_service.get_paper_by_url(ieee_url)
         except Exception as e:
             logger.error(f"Ошибка при получении IEEE статьи {ieee_id}: {e}")
             return None
     
-    async def get_paper_by_doi(self, doi: str) -> Optional[Paper]:
+    async def get_paper_by_doi(self, doi: str, full_text: bool = False) -> Optional[Paper]:
         """Получает статью по DOI через Semantic Scholar."""
         # Добавляем Semantic Scholar сервис если его нет
         if not self._services.get('semantic_scholar'):
@@ -468,8 +481,11 @@ class SearchService:
             
         try:
             ss_service = self._services['semantic_scholar']
-            # Ищем статью по DOI через Semantic Scholar
             async with ss_service:
+                if full_text:
+                # Получаем полную версию статьи
+                    return await ss_service.get_full_text_by_id(doi)
+                # Ищем статью по DOI через Semantic Scholar
                 results = await ss_service.search_papers(doi, limit=1)
                 if results:
                     return results[0]
@@ -537,8 +553,8 @@ class SearchService:
         except Exception as e:
             logger.error(f"Ошибка при получении статьи по хешу заголовка {title_hash}: {e}")
             return None
-    
-    async def get_paper_by_identifier(self, callback_type: str, callback_value: str, user_id: Optional[int] = None) -> Optional[Paper]:
+
+    async def get_paper_by_identifier(self, callback_type: str, callback_value: str, user_id: Optional[int] = None, full_text: bool = False) -> Optional[Paper] | str:
         """
         Универсальный метод для получения статьи по различным типам идентификаторов.
         
@@ -546,23 +562,30 @@ class SearchService:
             callback_type: Тип идентификатора (arxiv, pubmed, ieee, doi, url, hash)
             callback_value: Значение идентификатора
             user_id: ID пользователя (нужен для поиска по хешу заголовка)
-            
+            full_text: Флаг, указывающий, нужно ли получать полный текст статьи
         Returns:
-            Paper объект или None
+            Paper: объект если не full_text
+            str: полный текст статьи если full_text
+            None если статья не найдена
         """
         try:
+            if full_text:
+                if not self._services.get('semantic_scholar'):
+                    self.add_service('semantic_scholar', SemanticScholarSearcher())
+                async with self._services['semantic_scholar'] as ss_service:
+                    return await ss_service.get_full_text_by_id(callback_value)
             if callback_type == 'arxiv':
-                return await self.get_arxiv_paper_by_id(callback_value)
+                return await self.get_arxiv_paper_by_id(callback_value, full_text=full_text)
             elif callback_type == 'pubmed' or callback_type.lower() == 'ncbi':
-                return await self.get_pubmed_paper_by_id(callback_value)
+                return await self.get_pubmed_paper_by_id(callback_value, full_text=full_text)
             elif callback_type == 'ieee':
-                return await self.get_ieee_paper_by_id(callback_value)
+                return await self.get_ieee_paper_by_id(callback_value, full_text=full_text)
             elif callback_type == 'doi':
-                return await self.get_paper_by_doi(callback_value)
+                return await self.get_paper_by_doi(callback_value, full_text=full_text)
             elif callback_type == 'url':
                 return await self.get_paper_by_url_part(callback_value)
             elif callback_type == 'hash':
-                return await self.get_paper_by_title_hash(callback_value, user_id)
+                return await self.get_paper_by_title_hash(callback_value, user_id, full_text=full_text)
             else:
                 logger.warning(f"Неизвестный тип идентификатора: {callback_type}")
                 return None

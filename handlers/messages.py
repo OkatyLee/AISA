@@ -239,7 +239,7 @@ async def _handle_summary_intent(message: Message, params: dict) -> str:
             except Exception:
                 current_paper = None
             if current_paper:
-                processing_msg = await message.answer("⏳ Суммаризирую текущую выбранную статью…")
+                processing_msg = await message.answer("⏳ Анализирую текущую выбранную статью…")
                 async with LLMService() as llm_service:
                     try:
                         summary = await llm_service.summarize(current_paper)
@@ -249,10 +249,10 @@ async def _handle_summary_intent(message: Message, params: dict) -> str:
                         except Exception:
                             pass
                 await message.answer(summary, parse_mode="Markdown")
-                return "Суммаризация завершена"
+                return "Анализ завершен"
             # Если и в пагинации ничего нет — просим указать ссылку/ID
             response = (
-                "Чтобы сделать резюме, пришлите ссылку на статью или укажите её DOI/ID (arXiv, PubMed, IEEE)."
+                "Чтобы сделать анализ, пришлите ссылку на статью или укажите её DOI/ID (arXiv, PubMed, IEEE)."
             )
             await message.answer(response)
             return response
@@ -268,14 +268,14 @@ async def _handle_summary_intent(message: Message, params: dict) -> str:
                 "ieee_id": "ieee",
             }
             callback_type = type_map.get(id_type, "url")
-            paper = await searcher.get_paper_by_identifier(callback_type, str(identifier), user_id)
+            paper = await searcher.get_paper_by_identifier(callback_type, str(identifier), user_id, full_text=True)
 
         if not paper:
             response = "❌ Не удалось найти статью по указанной ссылке/ID."
             await message.answer(response)
             return response
 
-        processing_msg = await message.answer("⏳ Суммаризирую статью, это может занять некоторое время…")
+        processing_msg = await message.answer("⏳ Анализирую статью, это может занять некоторое время…")
         async with LLMService() as llm_service:
             summary = await llm_service.summarize(paper)
         if processing_msg:
@@ -284,10 +284,10 @@ async def _handle_summary_intent(message: Message, params: dict) -> str:
             except Exception:
                 pass
         await message.answer(summary, parse_mode="Markdown")
-        return "Суммаризация завершена"
+        return "Анализ завершен"
     except Exception as e:
         await ErrorHandler.handle_summarization_error(message, e)
-        return "Произошла ошибка при суммаризации"
+        return "Произошла ошибка при анализе"
 
 async def _handle_unknown_intent(message: Message, result) -> str:
     """Обрабатывает неопознанное намерение."""

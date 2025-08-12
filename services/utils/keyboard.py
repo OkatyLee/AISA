@@ -68,7 +68,7 @@ def create_paper_keyboard(paper: Paper, user_id: int, is_saved: bool = False) ->
         
     keyboard.add(
         InlineKeyboardButton(
-            text="📊 Суммаризация",
+            text="📊 Анализ",
             callback_data=safe_callback_data("summary")
         )
     )

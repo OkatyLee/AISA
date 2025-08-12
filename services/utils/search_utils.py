@@ -298,7 +298,7 @@ class SearchUtils:
             ))
         
         keyboard.add(InlineKeyboardButton(
-            text="📊 Суммаризация",
+            text="📊 Анализ",
             callback_data=paper.get_safe_callback_data("summary")
         ))
         

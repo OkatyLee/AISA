@@ -246,7 +246,7 @@ async def search_command(message: Message, **kwargs):
     status_message = await message.answer(f"🔍 Ищу статьи по запросу: *{validator.escape_markdown(query)}*...", parse_mode="Markdown")
     
     try:
-        limit = params.get('-c', 5)
+        limit = params.get('-c', 15)
         active_adapters = []
         if any(keyword in query for keyword in ['--arxiv', '-a']):
             active_adapters.append('arxiv')

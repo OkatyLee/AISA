@@ -145,8 +145,21 @@ class InputValidator:
         Returns:
             Экранированный текст
         """
-        if not text:
-            return ""
+        MDV2_SPECIALS = r"_*\[\]()~`>#+\-=|{}.!\\"
         
-        # Экранируем специальные символы Markdown
-        return re.sub(r'([_*[\]()~`>#+\-=|{}.!])', r'\\\1', text)
+        # Разделяем текст на сегменты: обычный текст и блоки кода
+        parts = re.split(r'(```.*?```|`.*?`)', text, flags=re.DOTALL)
+        escaped_parts = []
+
+        for part in parts:
+            if part.startswith("```") and part.endswith("```"):
+                # Блок кода трогаем только для экранирования backslash
+                escaped_parts.append(part.replace("\\", "\\\\"))
+            elif part.startswith("`") and part.endswith("`"):
+                # Inline code — аналогично
+                escaped_parts.append(part.replace("\\", "\\\\"))
+            else:
+                # Обычный текст — экранируем все специальные символы
+                escaped_parts.append(re.sub(f"([{re.escape(MDV2_SPECIALS)}])", r"\\\1", part))
+
+        return "".join(escaped_parts)

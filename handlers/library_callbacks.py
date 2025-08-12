@@ -12,6 +12,7 @@ from utils import setup_logger
 import logging
 import re
 from services.utils.search_utils import SearchUtils
+from utils.validators import InputValidator
 
 logger = setup_logger(
     name="library_logger",
@@ -369,17 +370,18 @@ async def handle_summary(callback: CallbackQuery, **kwargs):
         callback_type = parts[1]  # source, url, hash
         callback_value = parts[2]  # actual id/value
         
-        await callback.answer("Начинаю суммаризацию...")
+        await callback.answer("Начинаю анализ...")
 
         # Получаем статью в зависимости от типа callback данных
         paper = None
         logger.debug(f"Получение статьи по {callback_type} с ID {callback_value} для пользователя {user_id}")
         async with SearchService() as searcher:
-            paper = await searcher.get_paper_by_identifier(callback_type, callback_value, user_id)
-        print(paper)
+            paper = await searcher.get_paper_by_identifier(callback_type, callback_value, user_id, full_text=True)
+        if paper is None:
+            await callback.message.answer("❌ Статья не найдена или не является openAccess")
         if paper:
             processing_msg = await callback.message.answer(
-                "⏳ Суммаризирую статью, это может занять некоторое время..."
+                "⏳ Анализирую статью, это может занять некоторое время..."
             )
             async with LLMService() as llm_service:
                 summary = await llm_service.summarize(paper)
@@ -387,7 +389,7 @@ async def handle_summary(callback: CallbackQuery, **kwargs):
             if processing_msg:
                 await processing_msg.delete()
             await callback.message.answer(summary, parse_mode="Markdown")
-            
+
         else:
             await callback.message.answer("❌ Статья не найдена")
             

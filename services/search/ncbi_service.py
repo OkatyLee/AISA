@@ -1,3 +1,4 @@
+from tkinter import NO
 import dateutil
 import httpx
 from config import load_config
@@ -235,7 +236,16 @@ class NCBISearcher(PaperSearcher):
                 query_parts.append(f'"{year}"[Publication Date]')
         
         return ' AND '.join(query_parts)
-    
+
+    async def get_full_text_by_id(self, paper_id: str) -> Optional[str]:
+        """
+        Получение полного текста статьи по ID из NCBI API.
+
+        :param paper_id: ID статьи.
+        :return: Полный текст статьи или None, если не найдено.
+        """
+        raise NotImplementedError("Метод get_full_text_by_id не реализован, используйте Semantic Scholar API для получения полного текста.")
+
     def _apply_post_filters(self, papers: list[Paper], filters: Dict[str, Any]) -> list[Paper]:
         """
         Применяет дополнительные фильтры к результатам поиска

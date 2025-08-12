@@ -41,9 +41,9 @@ class LLMService:
         """Генерация резюме с использованием LLM клиента."""
         try:
             system_prompt = """Ты эксперт по анализу научных статей. 
-                Твоя задача - создать краткое, но информативное резюме статьи на русском языке.
+                Твоя задача - провести анализ статьи на русском языке.
                 
-                Структура резюме должна включать:
+                Структура анализа должна включать:
                 1. Основную тему и цель исследования
                 2. Ключевые методы или подходы
                 3. Главные результаты и выводы
@@ -56,19 +56,14 @@ class LLMService:
                 - Если у статьи короткая аннотация, суммируй аккуратно без выдумывания деталей
                 
                 Резюме должно быть понятным для широкой аудитории, но сохранять научную точность."""
-            paper = paper.to_dict() if isinstance(paper, Paper) else paper
-            if not isinstance(paper, dict):
-                raise ValueError("Неверный формат статьи для суммаризации")
-            abstract_text = paper.get('abstract', '') or ''
-            title_text = paper.get('title', 'Название статьи не указано')
-            authors_list = paper.get('authors', []) or []
-            user_prompt = f"""Пожалуйста, суммаризируй следующую научную статью:
-
-                Название: {title_text}
-                Авторы: {', '.join(authors_list) if authors_list else 'Автор не указан'}
-
-                Содержание статьи:
-                {abstract_text[:163000]} 
+            #paper = paper.to_dict() if isinstance(paper, Paper) else paper
+            #if not isinstance(paper, dict):
+            #    raise ValueError("Неверный формат статьи для суммаризации")
+            #abstract_text = paper.get('abstract', '') or ''
+            #title_text = paper.get('title', 'Название статьи не указано')
+            #authors_list = paper.get('authors', []) or []
+            user_prompt = f"""Пожалуйста, проведи анализ следующей научной статьи:
+                {paper}
             """
             completion = await self.llm_client.chat.completions.create(
                 model="tngtech/deepseek-r1t2-chimera:free",

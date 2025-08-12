@@ -183,6 +183,9 @@ class IEEESearcher(PaperSearcher):
         
         return ' AND '.join(query_parts)
     
+    async def get_full_text_by_id(self, paper_id):
+        return await super().get_full_text_by_id(paper_id)
+    
     def _apply_post_filters(self, papers: list[Paper], filters: Dict[str, Any]) -> list[Paper]:
         """
         Применяет дополнительные фильтры к результатам поиска

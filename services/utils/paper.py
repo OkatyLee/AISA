@@ -199,3 +199,10 @@ class PaperSearcher(ABC):
         Получение подробной информации о статье по её URL.
         """
         pass
+
+    @abstractmethod
+    async def get_full_text_by_id(self, paper_id: str) -> str:
+        """
+        Получение полного текста статьи по её ID.
+        """
+        pass
