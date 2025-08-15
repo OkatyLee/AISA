@@ -1,7 +1,7 @@
+import os
 from aiogram import Dispatcher, F
-from aiogram.types import Message
+from aiogram.types import Message, FSInputFile
 from config.messages import COMMAND_MESSAGES
-from services.utils.search_utils import SearchUtils
 from utils.validators import InputValidator
 from nlp.query_processor import QueryProcessingResult, QueryProcessor
 from nlp.context_manager import ContextManager
@@ -17,6 +17,40 @@ logger = setup_logger(
     name='messages_logger',
     level='DEBUG'
 )
+
+# Backward-compatible shim for tests expecting class-based handler
+class MessageHandler:
+    def __init__(self, *args, **kwargs):
+        # args are ignored; modern flow uses nlp.query_processor internally
+        pass
+
+    async def handle(self, text: str) -> str:
+        # Minimal shim: mimic processing a generic message without Telegram context
+        # This is for test suite compatibility only.
+        fake = type("_Msg", (), {})()
+        fake.text = text
+        fake.from_user = type("_U", (), {"id": 0})()
+        fake.chat = type("_C", (), {"id": 0})()
+
+        # Provide minimal answer method to collect response
+        responses = []
+        async def _answer(t, **kwargs):
+            responses.append(str(t))
+        async def _answer_document(doc, **kwargs):
+            # record that a document would be sent
+            responses.append(f"<document:{getattr(doc, 'path', 'file')}>")
+        fake.answer = _answer
+        fake.answer_document = _answer_document
+
+        # Route into existing pipeline with a default intent path
+        try:
+            result = await query_processor.process(text, {})
+            await _handle_processed_query(fake, result)
+        except Exception as _:
+            # fallback generic message
+            responses.append("Не удалось обработать сообщение")
+        # Return last response text for tests
+        return responses[-1] if responses else ""
 
 def register_message_handlers(dp: Dispatcher):
     
@@ -209,31 +243,127 @@ async def _handle_summary_intent(message: Message, params: dict) -> str:
         from services.utils.paper import Paper
         from nlp.entity_classifier import RuleBasedEntityExtractor
         from utils.nlu.intents import Intent as _Intent
+        from services.utils.search_utils import SearchUtils
+        from utils.report import save_md_and_pdf, delete_report_files
 
         user_id = message.from_user.id
         identifier = None
         id_type = None
+        raw_text = params.get("query") or ""
+        text_lower = raw_text.lower()
+        compare_request = any(x in text_lower for x in [
+            "сравн", "compare", "несколько", "оба", "две", "двух", "3 статьи", "неск стат", "сравни"
+        ])
 
-        # Приоритет: явные поля в params, затем попытка извлечения из сырого текста
+        # Приоритет: явные поля в params
         for key in ["url", "doi", "arxiv_id", "pubmed_id", "ieee_id"]:
             if key in params and params[key]:
                 identifier = params[key]
                 id_type = key
                 break
 
-        raw_text = params.get("query")
-        if not identifier and raw_text:
-            # Попробуем извлечь идентификатор напрямую из текста
+        # Попытка извлечь несколько идентификаторов из текста
+        identifiers: list[tuple[str, str]] = []
+        if raw_text:
             extractor = RuleBasedEntityExtractor()
             extracted = await extractor.extract(raw_text, _Intent.GET_SUMMARY)
             for e in extracted.entities:
                 if e.type.value in ["url", "doi", "arxiv_id", "pubmed_id", "ieee_id"]:
-                    identifier = e.normalized_value or e.value
-                    id_type = e.type.value
-                    break
+                    identifiers.append((e.type.value, str(e.normalized_value or e.value)))
+        logger.debug(f"Извлеченные идентификаторы до дедупликации: {identifiers}")
+        # Дедупликация
+        if identifiers:
+            seen = set()
+            uniq = []
+            for t, v in identifiers:
+                k = (t, v)
+                if k not in seen:
+                    seen.add(k)
+                    uniq.append((t, v))
+            identifiers = uniq
+        logger.debug(f"Извлеченные идентификаторы: {identifiers}")
+        # Мульти-анализ, если просили сравнение и нашли >=2 id
+        if compare_request and len(identifiers) >= 2:
+            async with SearchService() as searcher:
+                processing_msg = await message.answer("🔍 Ищу статьи для сравнения...")
+                type_map = {
+                    "url": "url",
+                    "doi": "doi",
+                    "arxiv_id": "arxiv",
+                    "pubmed_id": "pubmed",
+                    "ieee_id": "ieee",
+                }
+                papers: list[Paper] = []
+                for t, v in identifiers[:5]:
+                    cb_type = type_map.get(t, "url")
+                    try:
+                        p = await searcher.get_paper_by_identifier(cb_type, v, user_id)
+                        if isinstance(p, Paper):
+                            papers.append(p)
+                    except Exception:
+                        continue
+                if not papers:
+                    await message.answer("❌ Не удалось найти статьи для сравнения")
+                    return "Не удалось найти статьи для сравнения"
+                try:
+                    items = await searcher.fetch_full_texts_for_papers(papers)
+                    if processing_msg:
+                        await processing_msg.edit_text("⏳ Готовлю сравнительный анализ нескольких статей…")
+                    else:
+                        processing_msg = await message.answer("⏳ Готовлю сравнительный анализ нескольких статей…")
+                    async with LLMService() as llm_service:
+                        summary = await llm_service.compare_many(items)
+                finally:
+                    try:
+                        await processing_msg.delete()
+                    except Exception:
+                        pass
+                # Сохраняем и отправляем как документ: MD всегда, PDF при наличии
+                base_name = "comparison_report"
+                await processing_msg.edit_text("📄 Сохраняю результаты анализа в документ")
+                if summary == "Лимит запросов на день исчерпан. Пожалуйста, попробуйте позже.":
+                    await processing_msg.edit_text("❌ " + summary)
+                    return "Лимит запросов на день исчерпан. Пожалуйста, попробуйте позже."
+                md_path, pdf_path = save_md_and_pdf(summary, base_name)
+                await processing_msg.delete()
+                if pdf_path and os.path.isfile(pdf_path) and os.path.getsize(pdf_path) > 0:
+                    await message.answer_document(FSInputFile(pdf_path), caption="Сравнительный анализ (PDF)")
+                else:
+                    await message.answer_document(FSInputFile(md_path), caption="Сравнительный анализ (Markdown)")
+                delete_report_files(base_name)
+                return "Сравнительный анализ завершен"
 
+        # Если нет явного идентификатора
         if not identifier:
-            # Попробуем использовать текущую статью из последнего активного поиска (пагинация)
+            # Попробуем сравнение по последнему поиску
+            if compare_request and not identifiers:
+                sid, data = SearchUtils._get_last_active_search(user_id)
+                papers = []
+                if data and data.get('papers'):
+                    papers = data['papers'][:3]
+                if papers:
+                    processing_msg = await message.answer("🔍 Ищу тексты статьей из последнего поиска для сравнения...")
+                    async with SearchService() as searcher:
+                        items = await searcher.fetch_full_texts_for_papers(papers)
+                        async with LLMService() as llm_service:
+                            await processing_msg.edit_text("⏳ Готовлю сравнительный анализ найденных статей…")
+                            summary = await llm_service.compare_many(items)
+                    
+                    base_name = "comparison_report"
+                    if summary == "Лимит запросов на день исчерпан. Пожалуйста, попробуйте позже.":
+                        await processing_msg.edit_text("❌ " + summary)
+                        return "Лимит запросов на день исчерпан. Пожалуйста, попробуйте позже."
+                    md_path, pdf_path = save_md_and_pdf(summary, base_name)
+                    logger.debug(f'MD: {md_path}, exists= {os.path.isfile(md_path)}, size= {os.path.getsize(md_path) if os.path.isfile(md_path) else 0}')
+                    if pdf_path and os.path.isfile(pdf_path) and os.path.getsize(pdf_path) > 0:
+                        await message.answer_document(FSInputFile(pdf_path), caption="Сравнительный анализ (PDF)")
+                    else:
+                        await message.answer_document(FSInputFile(md_path), caption="Сравнительный анализ (Markdown)")
+                    await processing_msg.delete()
+                    delete_report_files(base_name)
+                    return "Сравнительный анализ завершен"
+
+            # Или используем текущую выбранную статью
             try:
                 current_paper = SearchUtils.get_current_paper_for_user(user_id)
             except Exception:
@@ -241,25 +371,30 @@ async def _handle_summary_intent(message: Message, params: dict) -> str:
             if current_paper:
                 processing_msg = await message.answer("⏳ Анализирую текущую выбранную статью…")
                 async with LLMService() as llm_service:
-                    try:
-                        summary = await llm_service.summarize(current_paper)
-                    finally:
-                        try:
-                            await processing_msg.delete()
-                        except Exception:
-                            pass
-                await message.answer(summary, parse_mode="Markdown")
+                    
+                    summary = await llm_service.summarize(current_paper)
+                    
+                base_name = "article_analysis"
+                if summary == "Лимит запросов на день исчерпан. Пожалуйста, попробуйте позже.":
+                    await processing_msg.edit_text("❌ " + summary)
+                    return "Лимит запросов на день исчерпан. Пожалуйста, попробуйте позже."
+                md_path, pdf_path = save_md_and_pdf(summary, base_name)
+                if pdf_path and os.path.isfile(pdf_path) and os.path.getsize(pdf_path) > 0:
+                    await message.answer_document(FSInputFile(pdf_path), caption="Анализ статьи (PDF)")
+                else:
+                    await message.answer_document(FSInputFile(md_path), caption="Анализ статьи (Markdown)")
+                delete_report_files(base_name)
                 return "Анализ завершен"
-            # Если и в пагинации ничего нет — просим указать ссылку/ID
+
+            # Просим указать идентификатор
             response = (
                 "Чтобы сделать анализ, пришлите ссылку на статью или укажите её DOI/ID (arXiv, PubMed, IEEE)."
             )
             await message.answer(response)
             return response
 
-        # Получаем статью по идентификатору
+        # Получаем статью по идентификатору (одна статья)
         async with SearchService() as searcher:
-            # Маппинг типов id для метода get_paper_by_identifier
             type_map = {
                 "url": "url",
                 "doi": "doi",
@@ -267,6 +402,7 @@ async def _handle_summary_intent(message: Message, params: dict) -> str:
                 "pubmed_id": "pubmed",
                 "ieee_id": "ieee",
             }
+            processing_msg = await message.answer("🔍 Ищу полный текст статьи…")
             callback_type = type_map.get(id_type, "url")
             paper = await searcher.get_paper_by_identifier(callback_type, str(identifier), user_id, full_text=True)
 
@@ -274,16 +410,31 @@ async def _handle_summary_intent(message: Message, params: dict) -> str:
             response = "❌ Не удалось найти статью по указанной ссылке/ID."
             await message.answer(response)
             return response
-
-        processing_msg = await message.answer("⏳ Анализирую статью, это может занять некоторое время…")
+        if processing_msg:
+            await processing_msg.edit_text("⏳ Анализирую статью, это может занять некоторое время…")
+        else:
+            processing_msg = await message.answer("⏳ Анализирую статью, это может занять некоторое время…")
         async with LLMService() as llm_service:
             summary = await llm_service.summarize(paper)
+        
+        base_name = "article_analysis"
+        if summary == "Лимит запросов на день исчерпан. Пожалуйста, попробуйте позже.":
+            await processing_msg.edit_text("❌ " + summary)
+            return "Лимит запросов на день исчерпан. Пожалуйста, попробуйте позже."
+        md_path, pdf_path = save_md_and_pdf(summary, base_name)
+        await processing_msg.edit_text("📄 Сохраняю результаты анализа в документ")
+        logger.debug(f"MD: {md_path}, exists={os.path.isfile(md_path)}, size={os.path.getsize(md_path) if os.path.isfile(md_path) else 0}")
+        logger.debug(f"PDF: {pdf_path}, exists={os.path.isfile(pdf_path) if pdf_path else False}, size={os.path.getsize(pdf_path) if pdf_path and os.path.isfile(pdf_path) else 0}")
         if processing_msg:
             try:
                 await processing_msg.delete()
             except Exception:
                 pass
-        await message.answer(summary, parse_mode="Markdown")
+        if pdf_path and os.path.isfile(pdf_path) and os.path.getsize(pdf_path) > 0:
+            await message.answer_document(FSInputFile(pdf_path), caption="Анализ статьи (PDF)")
+        else:
+            await message.answer_document(FSInputFile(md_path), caption="Анализ статьи (Markdown)")
+        delete_report_files(base_name)
         return "Анализ завершен"
     except Exception as e:
         await ErrorHandler.handle_summarization_error(message, e)

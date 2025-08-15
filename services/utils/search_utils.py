@@ -1,3 +1,4 @@
+from __future__ import annotations
 from aiogram.types import Message, CallbackQuery, InlineKeyboardButton
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.utils.keyboard import InlineKeyboardBuilder

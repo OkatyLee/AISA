@@ -1,6 +1,7 @@
+from click import Option
 from utils.nlu.intents import Intent
 from utils.nlu.entities import Entity, EntityType, EntityExtractionResult
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 from re import Pattern
 import re
 

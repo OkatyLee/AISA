@@ -57,8 +57,8 @@ class Paper:
         }   
         
     def __getitem__(self, key):
-        return getattr(self, key, None)    
-        
+        return getattr(self, key, None) 
+
     @property
     def arxiv_id(self):
         return self.external_id if self.source == 'arxiv' else None

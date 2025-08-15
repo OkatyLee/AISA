@@ -45,6 +45,8 @@ def register_library_handlers(dp: Dispatcher):
         handle_summary,
         lambda c: c.data.startswith("summary:")
     )
+    # Зарезервировано для будущей кнопки сравнения нескольких статей (compare:search_id:idx1,idx2,...)
+    # dp.callback_query.register(handle_compare_many, lambda c: c.data.startswith("compare:"))
 
 @track_operation("save_paper")
 async def handle_save_paper(callback: CallbackQuery, **kwargs):
@@ -388,6 +390,21 @@ async def handle_summary(callback: CallbackQuery, **kwargs):
                 
             if processing_msg:
                 await processing_msg.delete()
+            base_name = 'article_summary'
+            if summary == "Лимит запросов на день исчерпан. Пожалуйста, попробуйте позже.":
+                await processing_msg.edit_text("❌ " + summary)
+                return "Лимит запросов на день исчерпан. Пожалуйста, попробуйте позже."
+            from utils.report import save_md_and_pdf, delete_report_files
+            md_name, pdf_name = save_md_and_pdf(summary, base_name)
+            if pdf_name:
+                await callback.message.answer_document(
+                    types.FSInputFile(pdf_name), caption="Суммаризация статьи (PDF)"
+                )
+            else:
+                await callback.message.answer_document(
+                    types.FSInputFile(md_name), caption="Суммаризация статьи (Markdown)"
+                )
+            delete_report_files(base_name)
             await callback.message.answer(summary, parse_mode="Markdown")
 
         else:

@@ -38,6 +38,8 @@ class RuleBasedIntentClassifier:
                 r"\barxiv\s*[:]?\s*\d{4}\.\d{4,5}(?:v\d+)?\b",
                 r"\b(?:pmid|pubmed)\s*[:]?\s*\d{5,9}\b",
                 r"\b(?:ieee|document)\s*[:#]?\s*\d{5,9}\b",
+                r"\b(?:compare|сравнить)\s*[:]?\s*(\d+)\s*,\s*(\d+)\b",
+                r"\b(?:сравни|сравн|compare|несколько|оба|две|двух|3 статьи|неск стат|сравни)\b",
             ],
             Intent.HELP: [
                 r"помощь|help|как.*работать|что.*умеешь|команды",

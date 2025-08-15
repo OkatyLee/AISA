@@ -13,7 +13,8 @@ import asyncio
 import time
 
 logger = setup_logger(
-    "SemanticScholarService"
+    "ss_service_logger",
+    level="DEBUG"
 )
 
 class SemanticScholarSearcher(PaperSearcher):
@@ -144,6 +145,7 @@ class SemanticScholarSearcher(PaperSearcher):
         source_metadata = {}
         
         external_ids = paper_data.get("externalIds", {})
+        logger.debug(f"External IDs: {external_ids}")
         if external_ids:
             if external_ids.get("ArXiv"):
                 source = "arxiv"
@@ -151,6 +153,9 @@ class SemanticScholarSearcher(PaperSearcher):
             elif external_ids.get("PubMed"):
                 source = "pubmed"
                 external_id = external_ids["PubMed"]
+            elif external_ids.get("PubMedCentral"):
+                source = "pmc"
+                external_id = external_ids["PubMedCentral"]
             elif external_ids.get("IEEE"):
                 source = "ieee"
                 external_id = external_ids["IEEE"]
@@ -159,7 +164,6 @@ class SemanticScholarSearcher(PaperSearcher):
                 external_id = external_ids["DOI"]
             
             source_metadata = external_ids
-        print(publication_date)
         return Paper(
             title=paper_data.get("title", ""),
             authors=authors,
@@ -335,26 +339,13 @@ class SemanticScholarSearcher(PaperSearcher):
         async def fetch_paper_json(candidate_id: str) -> Optional[dict]:
             url = f"{self.BASE_URL}/paper/{quote(candidate_id, safe='')}"
             try:
-                resp = await self._client.get(url, params={"fields": fields})
+                data = await self._make_request(url, params={"fields": fields})
             except Exception as e:
-                logger.debug(f"Request failed for candidate '{candidate_id}': {e}")
+                logger.error(f"Request failed for candidate '{candidate_id}': {e}")
                 return None
-
-            if resp.status_code == 404:
-                logger.debug(f"Candidate '{candidate_id}' not found (404).")
+            if not data or isinstance(data, dict) and data.get("error"):
                 return None
-
-            try:
-                resp.raise_for_status()
-            except Exception as e:
-                logger.debug(f"Non-OK response for '{candidate_id}': {e}")
-                return None
-
-            try:
-                return resp.json()
-            except Exception as e:
-                logger.debug(f"Failed to parse JSON for '{candidate_id}': {e}")
-                return None
+            return data
 
         # Пробуем кандидатов
         for candidate in candidates:
@@ -415,21 +406,18 @@ class SemanticScholarSearcher(PaperSearcher):
         try:
             search_url = f"{self.BASE_URL}/paper/search"
             params = {"query": pid, "fields": "paperId,isOpenAccess,openAccessPdf", "limit": 1}
-            search_resp = await self._client.get(search_url, params=params)
+            search_json = await self._make_request(search_url, params=params)
         except Exception as e:
             logger.exception(f"Search request failed for '{pid}': {e}")
-            search_resp = None
+            search_json = None
 
-        if search_resp is not None and search_resp.status_code == 200:
+        if search_json and not search_json.get("error"):
             try:
-                search_json = search_resp.json()
                 results = search_json.get("data") or search_json.get("results") or search_json.get("papers") or []
                 if not results and isinstance(search_json.get("total"), int) and search_json.get("total") > 0:
-                    # иногда структура другая — попробуем взять items
                     results = search_json.get("items", [])
                 if results:
                     first = results[0]
-                    # Может быть сразу paperId или полный объект
                     paperId = first.get("paperId") if isinstance(first, dict) else None
                     if paperId:
                         logger.info(f"Search fallback found paperId {paperId} for query '{pid}' — пытаемся загрузить PDF.")
@@ -453,7 +441,7 @@ class SemanticScholarSearcher(PaperSearcher):
                             else:
                                 logger.info(f"Search-fallback found {paperId} but paper is not open access.")
             except Exception as e:
-                logger.debug(f"Failed to handle search response for '{pid}': {e}")
+                logger.error(f"Failed to handle search response for '{pid}': {e}")
 
         logger.error(f"Paper not found or not accessible for id '{pid}' (candidates tried: {candidates})")
         return None

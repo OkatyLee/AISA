@@ -4,15 +4,16 @@ from config.constants import ARXIV_API_BASE_URL, ARXIV_NAMESPACES, API_TIMEOUT_S
 from typing import List, Optional, Dict, Any
 import xml.etree.ElementTree as ET
 from datetime import datetime
+from services.utils.parse import parse_pdf_content
 from utils import setup_logger
 from utils.metrics import metrics
 import logging
 from urllib.parse import urlparse
 import re
 from services.utils.paper import Paper, PaperSearcher
-import fitz
+import asyncio
 
-logger = setup_logger(name="arxiv_service_logger", log_file="logs/arxiv_service.log", level=logging.INFO)
+logger = setup_logger(name="arxiv_service_logger", log_file="logs/arxiv_service.log", level=logging.DEBUG)
 
 class ArxivSearcher(PaperSearcher):
     """
@@ -26,10 +27,12 @@ class ArxivSearcher(PaperSearcher):
         self.session = None
         self.config = load_config()
         self.MAX_RESULTS = self.config.MAX_RESULTS
+        self.semaphore = asyncio.Semaphore(1)
         self._cache = {}  # Простой кэш для повторных запросов
 
     async def __aenter__(self):
         self.session = httpx.AsyncClient(
+            headers={'User-Agent': 'AIScientificAssisntant/1.0 (mailto:mvasilev801@gmail.com)'},
             timeout=30.0,
             follow_redirects=True
         )
@@ -355,132 +358,49 @@ class ArxivSearcher(PaperSearcher):
         '''
         Получение полного текста статьи по её ID.
         '''
-        try:
-            pdf_url = f"https://arxiv.org/pdf/{paper_id}.pdf"
-            logger.info(f"Получаем полный текст статьи по url: {pdf_url}")
+        async with self.semaphore:
+            await asyncio.sleep(1)
             
-            response = await self.session.get(pdf_url, timeout=API_TIMEOUT_SECONDS)
-            response.raise_for_status()
-            
-            pdf_bytes = response.content
-            
-            # Диагностика загруженных данных
-            logger.info(f"HTTP статус: {response.status_code}")
-            logger.info(f"Content-Type: {response.headers.get('content-type', 'не указан')}")
-            logger.info(f"Размер загруженных данных: {len(pdf_bytes)} байт")
-            
-            # Проверяем размер данных
-            if len(pdf_bytes) < 1000:
-                logger.error(f"Подозрительно маленький размер файла: {len(pdf_bytes)} байт")
-                logger.error(f"Содержимое: {pdf_bytes}")
-                return ""
-            
-            # Проверяем Content-Type
-            content_type = response.headers.get('content-type', '').lower()
-            if 'application/pdf' not in content_type and 'application/octet-stream' not in content_type:
-                logger.warning(f"Неожиданный Content-Type: {content_type}")
-                
-                if 'text/html' in content_type:
-                    # Получили HTML вместо PDF
-                    html_content = pdf_bytes.decode('utf-8', errors='ignore')[:1000]
-                    logger.error(f"Получен HTML вместо PDF: {html_content}")
-                    return ""
-            
-            # Проверяем PDF заголовок
-            if not pdf_bytes.startswith(b'%PDF'):
-                logger.error("Данные не являются валидным PDF файлом")
-                logger.error(f"Первые 50 байт: {pdf_bytes[:50]}")
-                
-                # Пробуем декодировать как текст для диагностики
-                try:
-                    text_preview = pdf_bytes[:500].decode('utf-8', errors='ignore')
-                    logger.error(f"Содержимое как текст: {text_preview}")
-                    
-                    # Проверяем на типичные ошибки arXiv
-                    if '<html' in text_preview.lower():
-                        logger.error("Получена HTML страница")
-                    elif 'not found' in text_preview.lower():
-                        logger.error("Статья не найдена")
-                    elif 'rate limit' in text_preview.lower() or 'too many' in text_preview.lower():
-                        logger.error("Превышен лимит запросов")
-                        
-                except UnicodeDecodeError:
-                    logger.error("Данные не являются текстом")
-                
-                return ""
-            
-            # Проверяем окончание PDF
-            if not pdf_bytes.rstrip().endswith(b'%%EOF'):
-                logger.warning("PDF файл может быть неполным (нет %%EOF в конце)")
-            
-        except httpx.HTTPStatusError as e:
-            logger.error(f"Ошибка загрузки PDF. Статус: {e.response.status_code} для ID: {paper_id}")
-            
-            # Дополнительная диагностика для разных статусов
-            if e.response.status_code == 403:
-                logger.error("Доступ запрещен - возможно превышен лимит запросов к arXiv")
-            elif e.response.status_code == 404:
-                logger.error(f"Статья с ID {paper_id} не найдена")
-            elif e.response.status_code == 429:
-                logger.error("Слишком много запросов - нужно добавить задержку")
-            
-            raise Exception(f"Ошибка загрузки PDF. Статус: {e.response.status_code} для ID: {paper_id}")
-            
-        except httpx.RequestError as e:
-            logger.error(f"Ошибка сети при запросе к {e.request.url!r}: {e}")
-            raise Exception(f"Ошибка сети при запросе к {e.request.url!r}.")
-        
-        logger.info(f"PDF для статьи {paper_id} успешно загружен и проверен")
-        
-        # Извлекаем текст из PDF
-        full_text = []
-        try:
-            pdf_document = fitz.open(stream=pdf_bytes, filetype="pdf")
-            
-            # Проверяем количество страниц
-            page_count = pdf_document.page_count
-            logger.info(f"PDF содержит {page_count} страниц")
-            
-            if page_count == 0:
-                logger.warning("PDF документ не содержит страниц")
-                pdf_document.close()
-                return ""
-            
-            # Извлекаем текст постранично с обработкой ошибок
-            for page_num, page in enumerate(pdf_document):
-                try:
-                    page_text = page.get_text()
-                    if page_text.strip():  # Добавляем только непустые страницы
-                        full_text.append(page_text)
-                    else:
-                        logger.debug(f"Страница {page_num + 1} пустая")
-                except Exception as page_error:
-                    logger.error(f"Ошибка при извлечении текста со страницы {page_num + 1}: {page_error}")
-                    continue
-            
-            pdf_document.close()
-            
-            if not full_text:
-                logger.warning(f"Не удалось извлечь текст ни с одной страницы из {page_count} страниц")
-                return ""
-            
-            result = "\n".join(full_text)
-            logger.info(f"Успешно извлечен текст из {len(full_text)} страниц, общая длина: {len(result)} символов")
-            return result
-            
-        except Exception as e:
-            logger.error(f"Ошибка при извлечении текста из PDF: {e}")
-            logger.error(f"Тип ошибки: {type(e).__name__}")
-            
-            # Дополнительная диагностика
+            pdf_url = f'https://arxiv.org/pdf/{paper_id}.pdf'
+            logger.info(f"Получаем полный текст статьи по ID {paper_id} из {pdf_url}")
+
+            # --- Блок запроса ---
             try:
-                # Пробуем открыть как поток еще раз для диагностики
-                import io
-                pdf_stream = io.BytesIO(pdf_bytes)
-                test_doc = fitz.open(stream=pdf_stream, filetype="pdf")
-                logger.info(f"Альтернативная проверка: документ открывается, страниц: {test_doc.page_count}")
-                test_doc.close()
-            except Exception as alt_error:
-                logger.error(f"Альтернативная проверка тоже не удалась: {alt_error}")
+                response = await self.session.get(pdf_url, timeout=API_TIMEOUT_SECONDS)
+                response.raise_for_status()
+                
+                pdf_bytes = await response.aread()
+            except httpx.RequestError as e:
+                logger.error(f"Ошибка сети при получении полного текста статьи {paper_id}: {e}")
+                return None
+            except httpx.HTTPStatusError as e:
+                logger.error(f"Ошибка {e.response.status_code} при получении полного текста статьи {paper_id}")
+                return None
             
-            return ""
+
+            # --- Блок валидации загруженных данных ---
+            
+            # Проверка 1: Заголовок PDF
+            if not pdf_bytes.startswith(b'%PDF'):
+                # Попробуем декодировать начало, чтобы понять, что пришло вместо PDF
+                content_preview = pdf_bytes[:500].decode('utf-8', errors='ignore').lower()
+                if 'not found' in content_preview or 'no paper' in content_preview:
+                    logger.error(f"Ошибка: Статья {paper_id} не найдена (получили HTML страницу с ошибкой).")
+                elif 'rate limit' in content_preview or 'too many requests' in content_preview:
+                    logger.error(f"Ошибка: Превышен лимит запросов к arXiv для ID {paper_id}.")
+                else:
+                    logger.error(f"Ошибка: Загруженные данные для {paper_id} не являются валидным PDF. "
+                                f"Первые 50 байт: {pdf_bytes[:50]}")
+                return ""
+
+            # Проверка 2: Минимальный размер (опционально)
+            if len(pdf_bytes) < 1000:
+                logger.warning(f"Подозрительно маленький размер PDF ({len(pdf_bytes)} байт) для {paper_id}.")
+                # Не возвращаем ошибку, но предупреждаем
+
+            # --- Блок извлечения текста ---
+            logger.debug(f'PDF для {paper_id}: {pdf_bytes[:100]}')
+            return parse_pdf_content(pdf_bytes, paper_id=paper_id, logger=logger)
+
+        
+

@@ -6,6 +6,7 @@ from typing import List, Dict, Any, Optional
 from dateutil.parser import parse
 from numpy import full
 from regex import W
+from sympy import N
 
 from services.search.semantic_scholar_service import SemanticScholarSearcher
 from services.utils import paper
@@ -14,11 +15,12 @@ from services.search import ArxivSearcher
 from services.search import IEEESearcher
 from services.search import NCBISearcher
 from utils import setup_logger
+from typing import Tuple
 
 logger = setup_logger(
     name="search_service_logger",
     log_file='logs/search_service.log',
-    level='INFO'
+    level='DEBUG'
 )
 
 
@@ -335,8 +337,6 @@ class SearchService:
             if key and key not in seen:
                 seen.add(key)
                 unique_papers.append(paper)
-            else:
-                print(f"Пропущена дублирующаяся статья: {paper.title} {paper.external_id} ({key})")
         
         return unique_papers
 
@@ -378,7 +378,6 @@ class SearchService:
                 years_ago = (datetime.now() - paper.publication_date).days / 365.25
                 if years_ago < 5:
                     score += (5 - years_ago) * 0.1
-            logger.debug(f'Paper {paper.title} has semantic score: {score}')
             paper.semantic_score = score
         return sorted(papers, key=lambda p: p.semantic_score, reverse=True)
 
@@ -518,7 +517,7 @@ class SearchService:
         logger.warning(f"Не удалось восстановить статью по части URL: {url_part}")
         return None
     
-    async def get_paper_by_title_hash(self, title_hash: int, user_id: Optional[int] = None) -> Optional[Paper]:
+    async def get_paper_by_title_hash(self, title_hash: int, user_id: Optional[int] = None, full_text: bool = False) -> Optional[Paper]:
         """
         Получает статью по хешу заголовка из базы данных.
         
@@ -569,14 +568,9 @@ class SearchService:
             None если статья не найдена
         """
         try:
-            if full_text:
-                if not self._services.get('semantic_scholar'):
-                    self.add_service('semantic_scholar', SemanticScholarSearcher())
-                async with self._services['semantic_scholar'] as ss_service:
-                    return await ss_service.get_full_text_by_id(callback_value)
             if callback_type == 'arxiv':
                 return await self.get_arxiv_paper_by_id(callback_value, full_text=full_text)
-            elif callback_type == 'pubmed' or callback_type.lower() == 'ncbi':
+            elif callback_type == 'pubmed' or callback_type == 'pmc':
                 return await self.get_pubmed_paper_by_id(callback_value, full_text=full_text)
             elif callback_type == 'ieee':
                 return await self.get_ieee_paper_by_id(callback_value, full_text=full_text)
@@ -592,3 +586,141 @@ class SearchService:
         except Exception as e:
             logger.error(f"Ошибка при получении статьи по идентификатору {callback_type}:{callback_value}: {e}")
             return None
+
+    async def fetch_full_texts_for_papers(
+        self,
+        papers: List[Paper],
+        max_chars_per_text: int = 40000,
+        concurrent: bool = True
+    ) -> List[Dict[str, Any]]:
+        """
+        Получить полный текст для списка статей с использованием доступных источников.
+
+        Логика:
+        - Пытаемся получить openAccess PDF через Semantic Scholar по DOI/PMID/arXiv/IEEE id
+        - Для arXiv делаем дополнительный fallback на прямую загрузку PDF
+
+        Returns: список словарей с метаданными и полным текстом/аннотацией
+        { title, authors, year, journal, url, source, doi, id, abstract, text }
+        """
+        # Гарантируем наличие Semantic Scholar сервиса
+        if 'semantic_scholar' not in self._services:
+            self._services['semantic_scholar'] = SemanticScholarSearcher()
+
+        ARXIV_ID_RE = re.compile(r"(\d{4}\.\d{4,5}(?:v\d+)?)", re.IGNORECASE)
+        DOI_ARXIV_RE = re.compile(r"^10\.48550/ARXIV\.(\d{4}\.\d{4,5}(?:v\d+)?)$", re.IGNORECASE)
+
+        def _collect_id_candidates(p: Paper) -> List[str]:
+            c: List[str] = []
+            # Prefer DOI first
+            if p.doi:
+                c.append(p.doi.strip())
+                # Extract arXiv id from arXiv DOI variant
+                m = DOI_ARXIV_RE.match(p.doi.strip())
+                if m:
+                    c.append(m.group(1))
+            # Known external id
+            if p.external_id:
+                c.append(str(p.external_id).strip())
+            # From URL (arXiv abs/pdf)
+            url = p.url or ""
+            ul = url.lower()
+            if 'arxiv.org' in ul:
+                # try split after abs/ or pdf/
+                try:
+                    part = url.rstrip('/').split('/')[-1]
+                    # if pdf, strip .pdf
+                    if part.endswith('.pdf'):
+                        part = part[:-4]
+                    if part:
+                        c.append(part)
+                except Exception:
+                    pass
+            # Title fragment as last resort
+            if p.title:
+                c.append((p.title or '').strip()[:128])
+            # Deduplicate keeping order
+            seen = set()
+            out = []
+            for v in c:
+                if v and v not in seen:
+                    seen.add(v)
+                    out.append(v)
+            return out
+
+        async def _fetch_one(p: Paper) -> Dict[str, Any]:
+            # --- Пытаемся получить полный текст статьи из источника p.source
+            text: Optional[str] = None
+            last_err: Optional[Exception] = None
+            candidates = _collect_id_candidates(p)
+            source = (p.source or '').lower()
+            if source and source in self._services.keys():
+                async with self._services[source] as ss:
+                    text = await ss.get_full_text_by_id(p['external_id'])
+            # --- Фоллбек: пытаемся получить текст из других источников
+            if text is None:
+                source = p['source']
+                logger.debug(f"Source for {p.external_id[:15]}: {source}")
+                for cid in candidates:
+                    try:
+                        async with self._services['semantic_scholar'] as ss:
+                            text = await ss.get_full_text_by_id(cid)
+                        if text is not None:
+                            break
+                    except Exception as e:
+                        last_err = e
+                        continue
+
+            # ограничиваем размер текста, если он слишком большой
+            if text:
+                text = text[:max_chars_per_text]
+            else:
+                text = ''
+
+            # формируем результат
+            year = None
+            try:
+                dt = p.publication_date
+                if hasattr(dt, 'year'):
+                    year = dt.year
+                elif isinstance(dt, str) and len(dt) >= 4 and dt[:4].isdigit():
+                    year = int(dt[:4])
+            except Exception:
+                year = None
+
+            # choose an identifier for reporting
+            chosen_id = candidates[0] if candidates else ''
+            return {
+                'title': p.title or '',
+                'authors': p.authors or [],
+                'year': year,
+                'journal': p.journal or '',
+                'url': p.url or '',
+                'source': (p.source or '').lower(),
+                'doi': p.doi or '',
+                'id': chosen_id,
+                'abstract': p.abstract or '',
+                'text': text,
+            }
+
+        if not papers:
+            return []
+
+        if concurrent:
+            tasks = [asyncio.create_task(_fetch_one(p)) for p in papers]
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            out: List[Dict[str, Any]] = []
+            for r in results:
+                if isinstance(r, Exception):
+                    logger.error(f"Full-text fetch error in batch: {r}")
+                else:
+                    out.append(r)
+            return out
+        else:
+            out: List[Dict[str, Any]] = []
+            for p in papers:
+                try:
+                    out.append(await _fetch_one(p))
+                except Exception as e:
+                    logger.error(f"Full-text fetch error: {e}")
+            return out

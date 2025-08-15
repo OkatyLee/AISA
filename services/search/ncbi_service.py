@@ -1,13 +1,15 @@
 from tkinter import NO
+import xml
 import dateutil
 import httpx
+from sympy import fu
 from config import load_config
 from config.constants import NCBI_API_BASE_URL, API_TIMEOUT_SECONDS
 from services.utils.paper import Paper, PaperSearcher
 from utils import setup_logger
 from xml.etree import ElementTree as ET
 from typing import Optional, Dict, Any
-
+from services.utils.parse import parse_pdf_content
 
 logger = setup_logger(
     name="ncbi_service_logger",
@@ -237,14 +239,114 @@ class NCBISearcher(PaperSearcher):
         
         return ' AND '.join(query_parts)
 
-    async def get_full_text_by_id(self, paper_id: str) -> Optional[str]:
+    async def get_full_text_by_id(self, pmid: str) -> Optional[str]:
         """
-        Получение полного текста статьи по ID из NCBI API.
+        Получает полный текст или аннотацию статьи по PMID.
+        Пайплайн:
+        1. Найти PMCID по PMID.
+        2. Если PMCID найден -> Попытаться получить PDF из PMC OA.
+        3. Если PDF недоступен -> Попытаться получить полный текст из PMC XML.
+        4. Если PMCID НЕ найден -> Получить аннотацию из PubMed.
+        """
+        # --- Полуачем PMCID ---
+        pmcid = None
+        params = {
+            'db': 'pubmed',
+            'linkname': 'pubmed_pmc',
+            'id': pmid
+        }
+        try:
+            resp = await self._make_request('elink.fcgi', params)
+            resp.raise_for_status()
+            xml_content = resp.content
+            root = ET.fromstring(xml_content)
+            link_set_db = root.find(".//LinkSetDb[DbTo='pmc']")
+            if link_set_db is not None:
+                link_id = link_set_db.find(".//Id")
+                if link_id is not None and link_id.text:
+                    pmcid = 'PMC' + link_id.text
+        except httpx.RequestError as e:
+            logger.error(f"Error fetching PMCID for PMID {pmid}: {e}")
+            return None
+        except ET.ParseError as e:
+            logger.error(f"Ошибка парсинга XML-ответа от ELink: {e}")
+            return None
+        # --- Если PMCID НЕ найден: Фоллбэк на аннотацию из PubMed ---
+        if not pmcid:
+            logger.info(f"PMCID не найден для PMID {pmid}, переключаемся на аннотацию из PubMed.")
+            try:
+                params = {
+                    'db': 'pubmed',
+                    'id': pmid,
+                    'retmode': 'xml'
+                }
+                xml_resp = await self._make_request('efetch.fcgi', params)
+                xml_resp.raise_for_status()
+                pm_root = ET.fromstring(xml_resp.content)
+                abstract_nodes = pm_root.findall(".//Abstract/AbstractText")
+                if abstract_nodes:
+                    abstract_text = "\n".join(node.text.strip() for node in abstract_nodes if node.text)
+                    if abstract_text:
+                        return abstract_text
+                logger.info(f"Аннотация не найдена для PMID {pmid}")
+                return None
+            except httpx.RequestError as e:
+                logger.error(f"Error fetching abstract for PMID {pmid}: {e}")
+                return None
 
-        :param paper_id: ID статьи.
-        :return: Полный текст статьи или None, если не найдено.
-        """
-        raise NotImplementedError("Метод get_full_text_by_id не реализован, используйте Semantic Scholar API для получения полного текста.")
+        # --- Получаем полный текст статьи ---
+        try:
+            params = {
+                'id': pmcid
+            }
+            url = "https://www.ncbi.nlm.nih.gov/pmc/utils/oa/oa.fcgi"
+            resp = await self._make_request(url, params)
+            resp.raise_for_status()
+            oa_root = ET.fromstring(resp.content)
+            
+            pdf_link_node = oa_root.find(f".//record[@pmcid='{pmcid}']/link[@format='pdf']")
+            if pdf_link_node is not None:
+                pdf_url = pdf_link_node.get('href')
+                
+                pdf_resp = await self.client.get(pdf_url)
+                pdf_resp.raise_for_status()
+
+                pdf_content = pdf_resp.content
+                return parse_pdf_content(pdf_content, paper_id=pmcid, logger=logger)
+        except httpx.RequestError as e:
+            logger.error(f"Error fetching full text for PMCID {pmcid}: {e}")
+            return None
+        except ET.ParseError as e:
+            logger.error(f"Error parsing XML response for PMCID {pmcid}: {e}")
+            return None
+        except Exception as e:
+            logger.error(f"Unexpected error fetching full text for PMCID {pmcid}: {e}")
+            return None
+
+        # --- Фоллбек на XML ---
+        logger.warning(f"Полный текст не найден для PMCID {pmcid}, переключаемся на XML")
+        try:
+            params = {
+                'db': 'pmc',
+                'id': pmcid,
+                'retmode': 'xml'
+            }
+            xml_resp = await self._make_request('efetch.fcgi', params)
+            xml_resp.raise_for_status()
+            xml_root = ET.fromstring(xml_resp.content) 
+            body = xml_root.find('.//body')
+            full_text = " ".join(
+                t.strip() for t in (body if body is not None else xml_root)
+                .itertext() if t.strip()
+                )
+            if not full_text:
+                logger.warning(f"Полный текст не найден для PMCID {pmcid}")
+                return None
+            return full_text
+        except httpx.RequestError as e:
+            logger.error(f"Error fetching full text XML for PMCID {pmcid}: {e}")
+            return None
+            
 
     def _apply_post_filters(self, papers: list[Paper], filters: Dict[str, Any]) -> list[Paper]:
         """

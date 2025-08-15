@@ -11,7 +11,7 @@ def create_bot() -> Tuple[Bot, Dispatcher]:
     
     config = load_config()
     
-    bot = Bot(token=config.BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+    bot = Bot(token=config.BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.MARKDOWN))
     dp = Dispatcher()
     dp.message.middleware(Middleware(config))
     
