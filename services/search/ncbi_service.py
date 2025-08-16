@@ -1,3 +1,5 @@
+import asyncio
+from operator import is_
 from tkinter import NO
 import xml
 import dateutil
@@ -22,6 +24,7 @@ class NCBISearcher(PaperSearcher):
 
     def __init__(self):
         config = load_config()
+        self.semaphore = asyncio.Semaphore(10) 
         self.api_key = config.NCBI_API_KEY
         if not self.api_key:
             logger.warning("NCBI_API_KEY is not set")
@@ -71,8 +74,9 @@ class NCBISearcher(PaperSearcher):
         params = {
             "db": "pubmed",
             "term": enhanced_query,
-            "retmax": min(limit, 200),
-            "retmode": "xml"
+            "retmax": limit,
+            "retmode": "xml",
+            'sort': 'relevance'
         }
         if self.api_key:
             params["api_key"] = self.api_key
@@ -84,15 +88,27 @@ class NCBISearcher(PaperSearcher):
             return []
 
         pmids = [id_elem.text for id_elem in id_list.findall("Id")]
+        logger.info(f"Найдено {len(pmids)} статей для запроса: {query}")
         if not pmids:
             logger.warning("No PMIDs found in search response")
             return []
 
-        papers = await self._fetch_papers_details(pmids)
+        if len(pmids) > 100:
+            papers = []
+            for i in range(0, len(pmids), 100):
+                async with self.semaphore:
+                    await asyncio.sleep(0.1)  
+                    chunk = pmids[i:i + 100]
+                    papers.extend(await self._fetch_papers_details(chunk))
+        else:
+            papers = await self._fetch_papers_details(pmids)
+        
+        logger.info(f"Найдено {len(papers)} статей для запроса: {query}")
         
         # Применяем дополнительную фильтрацию
         if filters:
-            papers = self._apply_post_filters(papers, filters)
+            papers = await self._apply_post_filters(papers, filters)
+            
         
         return papers
     
@@ -228,15 +244,26 @@ class NCBISearcher(PaperSearcher):
         
         if filters:
             # Фильтр по автору
-            if 'author' in filters and filters['author']:
+            if filters.get('author'):
                 author = filters['author']
-                query_parts.append(f'"{author}"[Author]')
-            
-            # Фильтр по году
-            if 'year' in filters and filters['year']:
+                query_parts.append(f'"{author}"[AU]')
+                
+            if filters.get('year'):
                 year = str(filters['year'])
-                query_parts.append(f'"{year}"[Publication Date]')
-        
+                is_later = year.startswith('>')
+                is_earlier = year.startswith('<')
+                year = year.lstrip('><')
+                if is_later:
+                    query_parts.append(f'{year}/01/01:3000/12/31[PDAT]')
+                elif is_earlier:
+                    query_parts.append(f'0000/01/01:{year}/12/31[PDAT]')
+                else:
+                    query_parts.append(f'{year}/01/01:{year}/12/31[PDAT]')
+            
+            if filters.get('journal'):
+                journal = filters['journal']
+                query_parts.append(f'"{journal}"[TA]')
+
         return ' AND '.join(query_parts)
 
     async def get_full_text_by_id(self, pmid: str) -> Optional[str]:
@@ -348,7 +375,7 @@ class NCBISearcher(PaperSearcher):
             return None
             
 
-    def _apply_post_filters(self, papers: list[Paper], filters: Dict[str, Any]) -> list[Paper]:
+    async def _apply_post_filters(self, papers: list[Paper], filters: Dict[str, Any]) -> list[Paper]:
         """
         Применяет дополнительные фильтры к результатам поиска
         
@@ -359,25 +386,33 @@ class NCBISearcher(PaperSearcher):
         Returns:
             Отфильтрованный список статей
         """
-        filtered_papers = []
-        
-        for paper in papers:
-            # Фильтр по автору (дополнительная проверка)
-            if 'author' in filters and filters['author']:
-                author_filter = filters['author'].lower()
-                paper_authors = [author.lower() for author in paper.authors]
-                if not any(author_filter in author for author in paper_authors):
-                    continue
-            
-            # Фильтр по году
-            if 'year' in filters and filters['year']:
-                year_filter = str(filters['year'])
-                if paper.publication_date:
-                    # Извлекаем год из даты публикации
-                    paper_year = paper.publication_date.split('-')[0] if '-' in paper.publication_date else paper.publication_date
-                    if paper_year != year_filter:
-                        continue
-            
-            filtered_papers.append(paper)
-        
+        filtered_papers = papers
+        logger.info(f"Фильтр по количеству цитат: {filters.get('citation_count')}")
+        # Фильтр по количеству цитат
+        if filters.get('citation_count'):
+            citation_counts = filters['citation_count']
+            url = 'https://api.semanticscholar.org/graph/v1/paper/batch'
+            params = {'fields': 'citationCount'}
+            js={"ids": [f'PMID:{paper.external_id}' for paper in papers]}
+            logger.info(f'Первые элементы во втором чанке: {js["ids"][500:510]}')
+            json_arr = []
+            chunk_size = 500
+            if len(js['ids']) > chunk_size:
+                for i in range(0, len(js['ids']), chunk_size):
+                    chunk = {"ids": js["ids"][i:i + chunk_size]}
+                    try:
+                        resp = await self.client.post(url, params=params, json=chunk)
+                        resp.raise_for_status()
+                        json_arr.extend(resp.json())
+                    except Exception as e:
+                        logger.error(f"Error in chunk {i}: {e} - Response: {resp.text if 'resp' in locals() else 'No response'}")
+            else:
+                resp = await self.client.post(url, params=params, json=js)
+                resp.raise_for_status()
+                json_arr = resp.json()
+            for it in range(len(json_arr)):
+                if json_arr[it] is None:
+                    json_arr[it] = {'citationCount': -1}
+            filtered_papers = [papers[i] for i in range(len(papers)) if int(json_arr[i]['citationCount']) >= int(citation_counts)]
+        logger.info(f'Отфильтровано статей: {len(filtered_papers)}')
         return filtered_papers

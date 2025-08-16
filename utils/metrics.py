@@ -8,7 +8,7 @@ from typing import Dict, Any
 from datetime import datetime, timedelta
 from utils import setup_logger
 
-logger = setup_logger(name="metrics", level="INFO")
+logger = setup_logger(name="metrics", log_file='logs/metrics.log',level="INFO")
 
 class MetricsCollector:
     """Сбор и анализ метрик работы бота"""

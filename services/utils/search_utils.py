@@ -186,7 +186,15 @@ class SearchUtils:
                         except TelegramBadRequest:
                             pass
                     else:
-                        raise
+                        try:
+                            await message_or_callback.message.edit_text(
+                                full_message,
+                                parse_mode=None,
+                                reply_markup=keyboard.as_markup(),
+                                disable_web_page_preview=True
+                            )
+                        except:
+                            raise
                 if auto_answer:
                     await message_or_callback.answer()
             else:
@@ -198,7 +206,16 @@ class SearchUtils:
                     disable_web_page_preview=True
                 )
         except Exception as e:
-            logger.error(f"Ошибка при отправке пагинированных результатов: {e}")
+            try:
+                await message_or_callback.message.edit_text(
+                    full_message,
+                    parse_mode=None,
+                    reply_markup=keyboard.as_markup(),
+                    disable_web_page_preview=True
+                )
+            except:
+                logger.error(f"Ошибка при отправке пагинированных результатов: {e}")
+                raise
 
     @staticmethod
     def _get_last_active_search(user_id: int):

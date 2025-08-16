@@ -145,7 +145,6 @@ class SemanticScholarSearcher(PaperSearcher):
         source_metadata = {}
         
         external_ids = paper_data.get("externalIds", {})
-        logger.debug(f"External IDs: {external_ids}")
         if external_ids:
             if external_ids.get("ArXiv"):
                 source = "arxiv"
@@ -186,6 +185,33 @@ class SemanticScholarSearcher(PaperSearcher):
             await asyncio.sleep(delay)
         self._last_call_ts = time.monotonic()
         
+    def setup_params(self, params: Dict[str, str], filters: Dict[str, str]) -> Dict[str, str]:
+        """
+        Устанавливает параметры запроса для Semantic Scholar API.
+        
+        :param params: Словарь параметров.
+        :return: Обновленный словарь параметров.
+        """
+        if filters.get("year"):
+            year = filters["year"]
+            if isinstance(year, int):
+                year = str(year)
+            is_later = year.startswith(">")
+            is_earlier = year.startswith("<")  
+            year = year.lstrip('<>')
+            if is_later:
+                params['year'] = f'{year}-'
+            if is_earlier:
+                params['year'] = f'-{year}'
+            else:
+                params['year'] = year
+        if filters.get("citation_count"):
+            params['sort'] = 'citationCount:desc'
+            params['minCitationCount'] = filters["citation_count"]
+        if filters.get("journal"):
+            params['venue'] = filters["journal"]
+        return params
+
     async def search_papers(self, query, limit = 10, filters = None):
         is_doi = self.DOI_REGEX.match(query)
         if is_doi:
@@ -204,32 +230,104 @@ class SemanticScholarSearcher(PaperSearcher):
                 logger.error(f"Error occurred while searching paper by DOI {query}: {e}")
                 return []
         else:
-            url = f"{self.BASE_URL}/paper/search"
-
-            params = {
-                "query": query,
-                "limit": limit,
-                "fields": self.FIELD,
-            }
-            
-            if filters:
-                for k in ("offset", "year", "yearFilter", "fieldsOfStudy", "venue"):
-                    if k in filters:
-                        params[k] = filters[k]
-            
-            try:
-                papers_json = await self._make_request(url, params=params)
-                if "error" in papers_json or "data" not in papers_json:
+            if filters.get('author'):
+                author_id = await self._search_author(filters['author'])
+                if not author_id:
+                    logger.error(f"Could not find author: {filters['author']}")
                     return []
-                papers = []
 
-                for paper_data in papers_json.get("data", []):
-                    paper = self._parse_paper_data(paper_data)
-                    papers.append(paper)
-                return papers
-            except Exception as e:
-                logger.error(f"Error occurred while searching papers: {e}")
-                return []
+                # Шаг 2: Формируем URL для получения статей автора
+                url = f"{self.BASE_URL}/author/{author_id}/papers"
+                params = {
+                    "query": query,  # Можно передать основной запрос для фильтрации по ключевым словам
+                    "limit": limit,
+                    "fields": self.FIELD,
+                }
+                
+                # Добавляем year, если указан (поддерживается в этом endpoint)
+                if filters.get("year"):
+                    year = filters["year"]
+                    if isinstance(year, int):
+                        year = str(year)
+                    is_later = year.startswith(">")
+                    is_earlier = year.startswith("<")
+                    
+                    if is_later:
+                        params['year'] = f'{year}-'
+                    elif is_earlier:
+                        params['year'] = f'-{year}'
+                    else:
+                        params['year'] = year
+                
+                # Для citation_count можно использовать sort, но не minCitationCount
+                if filters.get("citation_count"):
+                    params['sort'] = 'citationCount:desc'  # Сортировка по цитированиям (desc для убывания)
+                    min_citations = filters["citation_count"]
+                else:
+                    min_citations = None
+                
+                # Venue не поддерживается, запомним для локальной фильтрации
+                venue_filter = filters.get("journal")
+                
+                try:
+                    papers_json = await self._make_request(url, params=params)
+                    if "error" in papers_json or "data" not in papers_json:
+                        return []
+                    
+                    papers = []
+                    for paper_data in papers_json.get("data", []):
+                        # Локальная фильтрация для неподдерживаемых параметров
+                        if min_citations and paper_data.get("citationCount", 0) < min_citations:
+                            continue
+                        if venue_filter and paper_data.get("venue", "").lower() != venue_filter.lower():
+                            continue
+                        
+                        paper = self._parse_paper_data(paper_data)
+                        papers.append(paper)
+                    
+                    return papers
+                except Exception as e:
+                    logger.error(f"Error occurred while searching papers by author: {e}")
+                    return []
+
+            else:
+                url = f"{self.BASE_URL}/paper/search"
+
+                params = {
+                    "query": query,
+                    "limit": limit,
+                    "fields": self.FIELD,
+                }
+                params = self.setup_params(params, filters or {})
+                try:
+                    papers_json = await self._make_request(url, params=params)
+                    if "error" in papers_json or "data" not in papers_json:
+                        return []
+                    papers = []
+
+                    for paper_data in papers_json.get("data", []):
+                        paper = self._parse_paper_data(paper_data)
+                        papers.append(paper)
+                    return papers
+                except Exception as e:
+                    logger.error(f"Error occurred while searching papers: {e}")
+                    return []
+    
+    async def _search_author(self, author_name: str) -> str | None:
+        url = f"{self.BASE_URL}/author/search"
+        params = {
+            "query": author_name,
+            "limit": 1, 
+            "fields": "authorId"
+        }
+        try:
+            response = await self._make_request(url, params=params)
+            if "data" in response and response["data"]:
+                return response["data"][0]["authorId"]
+            return None
+        except Exception as e:
+            logger.error(f"Error searching author: {e}")
+            return None
         
     def _extract_paper_id_from_url(self, url: str) -> Optional[str]:
         """
@@ -309,7 +407,6 @@ class SemanticScholarSearcher(PaperSearcher):
         if m:
             arxiv_id = m.group(1)
             candidates.append(f"ARXIV:{arxiv_id}")
-            candidates.append(f"arXiv:{arxiv_id}")
 
         # Чистые цифры — вероятно PubMed
         if pid.isdigit():

@@ -1,5 +1,6 @@
 import asyncio
 from datetime import datetime
+from operator import call
 import re
 from typing import List, Dict, Any, Optional
 
@@ -570,7 +571,7 @@ class SearchService:
         try:
             if callback_type == 'arxiv':
                 return await self.get_arxiv_paper_by_id(callback_value, full_text=full_text)
-            elif callback_type == 'pubmed' or callback_type == 'pmc':
+            elif callback_type == 'pubmed' or callback_type == 'pmc' or callback_type.lower() == 'ncbi':
                 return await self.get_pubmed_paper_by_id(callback_value, full_text=full_text)
             elif callback_type == 'ieee':
                 return await self.get_ieee_paper_by_id(callback_value, full_text=full_text)
@@ -607,69 +608,44 @@ class SearchService:
         if 'semantic_scholar' not in self._services:
             self._services['semantic_scholar'] = SemanticScholarSearcher()
 
-        ARXIV_ID_RE = re.compile(r"(\d{4}\.\d{4,5}(?:v\d+)?)", re.IGNORECASE)
-        DOI_ARXIV_RE = re.compile(r"^10\.48550/ARXIV\.(\d{4}\.\d{4,5}(?:v\d+)?)$", re.IGNORECASE)
-
-        def _collect_id_candidates(p: Paper) -> List[str]:
-            c: List[str] = []
+        def _get_s2_paper_id(p: Paper) -> str:
+            pid = None
             # Prefer DOI first
             if p.doi:
-                c.append(p.doi.strip())
-                # Extract arXiv id from arXiv DOI variant
-                m = DOI_ARXIV_RE.match(p.doi.strip())
-                if m:
-                    c.append(m.group(1))
-            # Known external id
-            if p.external_id:
-                c.append(str(p.external_id).strip())
-            # From URL (arXiv abs/pdf)
-            url = p.url or ""
-            ul = url.lower()
-            if 'arxiv.org' in ul:
-                # try split after abs/ or pdf/
-                try:
-                    part = url.rstrip('/').split('/')[-1]
-                    # if pdf, strip .pdf
-                    if part.endswith('.pdf'):
-                        part = part[:-4]
-                    if part:
-                        c.append(part)
-                except Exception:
-                    pass
-            # Title fragment as last resort
-            if p.title:
-                c.append((p.title or '').strip()[:128])
-            # Deduplicate keeping order
-            seen = set()
-            out = []
-            for v in c:
-                if v and v not in seen:
-                    seen.add(v)
-                    out.append(v)
-            return out
+                pid = f'DOI:{p.doi.strip()}'
+            elif p.external_id and p.source:
+                if p.source == 'arxiv':
+                    pid = f'ARXIV:{p.external_id.strip()}'
+                elif p.source == 'pubmed':
+                    pid = f'PUBMED:{p.external_id.strip()}'
+                elif p.source == 'PMC':
+                    pid = f'PMC:{p.external_id.strip()}'
+                elif p.source == 'ieee':
+                    pid = f'IEEE:{p.external_id.strip()}'
+            elif p.url:
+                pid = p.url.rstrip('/').split('/')[-1]
+            elif p.title:
+                pid = p.title.strip().lower().replace(' ', '_')[:64]
+            return pid
 
         async def _fetch_one(p: Paper) -> Dict[str, Any]:
             # --- Пытаемся получить полный текст статьи из источника p.source
             text: Optional[str] = None
-            last_err: Optional[Exception] = None
-            candidates = _collect_id_candidates(p)
+            s2_id = _get_s2_paper_id(p)
             source = (p.source or '').lower()
             if source and source in self._services.keys():
-                async with self._services[source] as ss:
-                    text = await ss.get_full_text_by_id(p['external_id'])
+                text = await self._services[source].get_full_text_by_id(p['external_id'])
             # --- Фоллбек: пытаемся получить текст из других источников
             if text is None:
                 source = p['source']
                 logger.debug(f"Source for {p.external_id[:15]}: {source}")
-                for cid in candidates:
-                    try:
-                        async with self._services['semantic_scholar'] as ss:
-                            text = await ss.get_full_text_by_id(cid)
-                        if text is not None:
-                            break
-                    except Exception as e:
-                        last_err = e
-                        continue
+                
+                try:
+                    text = await self._services['semantic_scholar'].get_full_text_by_id(s2_id)
+                    
+                except Exception as e:
+                    logger.error(f'Ошибка при поиске через S2: {e}')
+                    
 
             # ограничиваем размер текста, если он слишком большой
             if text:
@@ -688,8 +664,6 @@ class SearchService:
             except Exception:
                 year = None
 
-            # choose an identifier for reporting
-            chosen_id = candidates[0] if candidates else ''
             return {
                 'title': p.title or '',
                 'authors': p.authors or [],
@@ -698,24 +672,30 @@ class SearchService:
                 'url': p.url or '',
                 'source': (p.source or '').lower(),
                 'doi': p.doi or '',
-                'id': chosen_id,
+                'id': p.external_id or '',
                 'abstract': p.abstract or '',
                 'text': text,
             }
 
         if not papers:
             return []
-
+        
         if concurrent:
-            tasks = [asyncio.create_task(_fetch_one(p)) for p in papers]
-            results = await asyncio.gather(*tasks, return_exceptions=True)
-            out: List[Dict[str, Any]] = []
-            for r in results:
-                if isinstance(r, Exception):
-                    logger.error(f"Full-text fetch error in batch: {r}")
-                else:
-                    out.append(r)
-            return out
+            async with (
+                self._services['semantic_scholar'] as s2_ss,
+                self._services['arxiv'] as arxiv_ss,
+                self._services['ncbi'] as ncbi_ss,
+                self._services['ieee'] as ieee_ss):
+                # Параллельный fetch для всех статей
+                tasks = [asyncio.create_task(_fetch_one(p)) for p in papers]
+                results = await asyncio.gather(*tasks, return_exceptions=True)
+                out: List[Dict[str, Any]] = []
+                for r in results:
+                    if isinstance(r, Exception):
+                        logger.error(f"Full-text fetch error in batch: {r}")
+                    else:
+                        out.append(r)
+                return out
         else:
             out: List[Dict[str, Any]] = []
             for p in papers:

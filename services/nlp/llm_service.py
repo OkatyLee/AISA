@@ -70,7 +70,7 @@ class LLMService:
                 {paper}
             """
             completion = await self.llm_client.chat.completions.create(
-                model="google/gemma-3n-e4b-it:free",
+                model="z-ai/glm-4.5-air:free",
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt}
@@ -142,7 +142,7 @@ class LLMService:
             )
 
             completion = await self.llm_client.chat.completions.create(
-                model="google/gemma-3n-e4b-it:free",
+                model="z-ai/glm-4.5-air:free",
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt},

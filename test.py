@@ -1,3 +1,5 @@
+import sqlite3
+from sympy import im
 import test
 from utils.report import _pdf_from_markdown_to_path
 import os
@@ -42,4 +44,10 @@ Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.
         else:
             print("❌ Ошибка")
 
-test_markdown_to_pdf()
+from database import SQLDatabase as db
+with sqlite3.connect(db.db_path) as conn:
+    cursor = conn.cursor()
+    cursor.execute("SELECT user_id FROM saved_publications")
+    rows = cursor.fetchall()
+    for row in rows:
+        print(row)

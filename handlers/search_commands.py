@@ -36,38 +36,96 @@ def extract_search_filters(query: str) -> tuple[str, Dict[str, Any]]:
     """
     filters = {}
     cleaned_query = query
+    def search_patterns(field: str, patterns: list[str], cleaned_query: str) -> Optional[str]:
+        for pattern in patterns:
+            match = re.search(pattern, cleaned_query, re.IGNORECASE)
+            if match:
+                filters[field] = match.group(1).strip()
+                cleaned_query = re.sub(pattern, '', cleaned_query, flags=re.IGNORECASE)
+        return cleaned_query
     
     # Извлечение фильтра по году
     year_patterns = [
-        r'year:(\d{4})',  # year:2023
-        r'year:"(\d{4})"',  # year:"2023"
-        r'year:\'(\d{4})\''  # year:'2023'
+        r'year:(>[0-9]{4})', # включает '>' + год
+        r'year:(<[0-9]{4})', # включает '<' + год
+        r'year:([0-9]{4})',
+        r'year:"([0-9]{4})"',
+        r"year:'([0-9]{4})'"
     ]
-    
-    for pattern in year_patterns:
-        match = re.search(pattern, cleaned_query, re.IGNORECASE)
-        if match:
-            filters['year'] = int(match.group(1))
-            cleaned_query = re.sub(pattern, '', cleaned_query, flags=re.IGNORECASE)
-            break
-    
+
+
+    cleaned_query = search_patterns('year', year_patterns, cleaned_query)
+
     # Извлечение фильтра по автору
     author_patterns = [
         r'author:"([^"]+)"',  # author:"John Smith"
         r"author:'([^']+)'",  # author:'John Smith'
-        r'author:([^\s]+)'    # author:smith
+        r'author:([^\s:]+)',    # author:smith
+        r'au:"([^"]+)"',  # author:"John Smith"
+        r"au:'([^']+)'",  # author:'John Smith'
+        r'au:([^\s:]+)',    # author:smith
     ]
-    
-    for pattern in author_patterns:
-        match = re.search(pattern, cleaned_query, re.IGNORECASE)
-        if match:
-            filters['author'] = match.group(1).strip()
-            cleaned_query = re.sub(pattern, '', cleaned_query, flags=re.IGNORECASE)
-            break
-    
+    cleaned_query = search_patterns('author', author_patterns, cleaned_query)
+
+    # Извлечение фильтра по журналу
+    journal_patterns = [
+        r'journal:"([^"]+)"',
+        r"journal:'([^']+)'",
+        r'journal:([^\s:]+)',
+        r'jr:"([^"]+)"',
+        r"jr:'([^']+)'",
+        r'jr:([^\s:]+)',
+    ]
+    cleaned_query = search_patterns('journal', journal_patterns, cleaned_query)
+
+    # Извлечение фильтра по ключевым словам
+    citation_count_patterns = [
+        r'citation_count:>(\d+)',  # citation_count:>100
+        r'citation_count:<(\d+)',  # citation_count:<100
+        r'citation_count:(\d+)',  # citation_count:100
+        r'citation_count:"(\d+)"',  # citation_count:"100"
+        r'citation_count:\'(\d+)\'',  # citation_count:'100'
+        r'citation:>(\d+)',  # citation_count:>100
+        r'citation:<(\d+)',  # citation_count:<100
+        r'citation:(\d+)',  # citation_count:100
+        r'citation:"(\d+)"',  # citation_count:"100"
+        r'citation:\'(\d+)\'',  # citation_count:'100'
+        
+    ]
+    cleaned_query = search_patterns('citation_count', citation_count_patterns, cleaned_query)
+
     # Очищаем запрос от лишних пробелов
     cleaned_query = ' '.join(cleaned_query.split())
     
+    logger.info(f"Извлеченные фильтры: {filters}, очищенный запрос: {cleaned_query}")
+
+    cleaned_query = cleaned_query.replace('--arxiv', '-a')
+    cleaned_query = cleaned_query.replace('--ieee', '-i')
+    cleaned_query = cleaned_query.replace('--ncbi', '-n')
+    cleaned_query = cleaned_query.replace('--semantic_scholar', '-s')
+    cleaned_query = cleaned_query.replace('--count', '-c')
+    sources_patterns = [
+        '-a', '-i', '-n', '-s'
+    ]
+    filters['source'] = []
+    for source in sources_patterns:
+        source_mapping = {
+            '-a': 'arxiv',
+            '-n': 'ncbi',
+            '-i': '-ieee',
+            '-s': 'semantic_scholar'
+        }
+        if source in cleaned_query:
+            filters['source'].append(source_mapping.get(source))
+            cleaned_query = cleaned_query.replace(source, '').strip()
+    if not filters['source']:
+        filters['source'] = None
+    if '-c' in cleaned_query:
+        filters['count'] = int(re.search(r'-c\s*(\d+)', cleaned_query).group(1))
+        if filters['count'] < 1:
+            filters['count'] = 1
+        cleaned_query = cleaned_query.replace(f'-c {filters["count"]}', '').strip()
+
     return cleaned_query, filters
 
 def register_search_handlers(dp: Dispatcher):
@@ -102,11 +160,11 @@ async def arxiv_command(message: Message, **kwargs):
         return
     
     # Валидация запроса
-    if not query or query.strip() == "/search":
+    if (not query or query.strip() == "/search") and filters.get('author') is None:
         await SearchUtils._send_search_help(message)
         return
-    
-    if len(query) < 3:
+
+    if len(query) < 3 and filters.get('author') is None:
         await ErrorHandler.handle_validation_error(
             message,
             "Запрос слишком короткий. Пожалуйста, введите минимум 3 символа."
@@ -117,12 +175,12 @@ async def arxiv_command(message: Message, **kwargs):
     await asyncio.sleep(TYPING_DELAY_SECONDS)
     await message.bot.send_chat_action(message.chat.id, "typing")
     status_message = await message.answer(f"🔍 Ищу статьи по запросу: *{validator.escape_markdown(query)}*...", parse_mode="Markdown")
-
+    limits = filters.get('count', 100)
     try:
         # Выполняем поиск
         async with ArxivSearcher() as searcher:
-            papers = await searcher.search_papers(query, 10, filters)
-            
+            papers = await searcher.search_papers(query, limit=limits, filters=filters)
+
         await status_message.delete()
         
         if not papers:
@@ -157,10 +215,10 @@ async def ieee_command(message: Message, **kwargs):
         
         await message.bot.send_chat_action(message.chat.id, "typing")
         status_message = await message.answer(f"🔍 Ищу статьи в IEEE по запросу: *{query}*...", parse_mode="Markdown")
-        
+        limits = filters.get('count', 100)
         async with IEEESearcher() as ieee_service:
-            papers = await ieee_service.search_papers(query, 10, filters)
-        
+            papers = await ieee_service.search_papers(query, limit=limits, filters=filters)
+
         await status_message.delete()
         
         if not papers:
@@ -196,9 +254,9 @@ async def ncbi_command(message: Message, **kwargs):
 
         await message.bot.send_chat_action(message.chat.id, "typing")
         status_message = await message.answer(f"🔍 Ищу статьи в NCBI по запросу: *{query}*...", parse_mode="Markdown")
-
+        limits = filters.get('count', 100)
         async with NCBISearcher() as ncbi_service:
-            papers = await ncbi_service.search_papers(query, 10, filters)
+            papers = await ncbi_service.search_papers(query, limit=limits, filters=filters)
 
         await status_message.delete()
 
@@ -222,14 +280,7 @@ async def search_command(message: Message, **kwargs):
     Команда /search - универсальный поиск по всем сервисам
     """
     query = message.text.replace("/search ", "").strip()
-    params_keywords = ['-a', '-i', '-n', '-c']
-    params = {}
-    if any(keyword in query for keyword in params_keywords):
-        for keyword in params_keywords:
-            if keyword in query:
-                value = query.split(keyword)[-1].strip().split(" ")[0]
-                params[keyword] = value
-                query = query.replace(keyword + " " + value, "").strip()
+    
     if not query:
         await SearchUtils._send_search_help(message)
         return
@@ -246,19 +297,11 @@ async def search_command(message: Message, **kwargs):
     status_message = await message.answer(f"🔍 Ищу статьи по запросу: *{validator.escape_markdown(query)}*...", parse_mode="Markdown")
     
     try:
-        limit = params.get('-c', 15)
-        active_adapters = []
-        if any(keyword in query for keyword in ['--arxiv', '-a']):
-            active_adapters.append('arxiv')
-        if any(keyword in query for keyword in ['--ieee', '-i']):
-            active_adapters.append('ieee')
-        if any(keyword in query for keyword in ['--ncbi', '-n']):
-            active_adapters.append('ncbi')
-        if not active_adapters:
-            active_adapters = None
-        search_service = SearchService()
-        results = await search_service.search_papers(query, limit=limit, services=active_adapters, filters=filters)
-        
+        limits = filters.get('count', 100)
+        active_adapters = filters.get('source', None)
+        async with SearchService() as search_service:
+            results = await search_service.search_papers(query, limit=limits, services=active_adapters, filters=filters)
+
         await status_message.delete()
         
         if not results:
@@ -285,16 +328,18 @@ async def semantic_search_command(message: Message, **kwargs):
         return
 
     await message.bot.send_chat_action(message.chat.id, "typing")
-    status_message = await message.answer(f"🔍 Ищу статьи по семантическому запросу: *{validator.escape_markdown(query)}*...", parse_mode="Markdown")
-    
     query, filters = extract_search_filters(query)
     query = validator.sanitize_text(query)
+    status_message = await message.answer(f"🔍 Ищу статьи по семантическому запросу: *{validator.escape_markdown(query)}*...", parse_mode="Markdown")
+    
+    
+    limits = filters.get('count', 100)
     if not query or len(query) < 3:
         await SearchUtils._send_search_help(message)
         return
     try:
         async with SemanticScholarSearcher() as search_service:
-            results = await search_service.search_papers(query, filters=filters)
+            results = await search_service.search_papers(query, limit=limits, filters=filters)
 
         await status_message.delete()
 
