@@ -3,6 +3,7 @@ from datetime import datetime
 from urllib.parse import quote, urlparse
 
 import fitz
+from numpy import isin
 from services.utils.paper import Paper, PaperSearcher
 import httpx
 from dateutil.parser import parse
@@ -336,16 +337,45 @@ class SemanticScholarSearcher(PaperSearcher):
         :param url: URL статьи.
         :return: Идентификатор статьи или None, если не удалось извлечь.
         """
-        parsed_url = urlparse(url)
-        path_parts = parsed_url.path.strip("/").split("/")
-        
-        if len(path_parts) >= 2 and path_parts[0] == "paper":
-            # Извлекаем последнюю часть как ID
-            paper_id = path_parts[-1]
-            if paper_id:
-                return paper_id
-        
-        raise ValueError("Cannot extract paper ID from URL")
+        url = url.lower()  # Для case-insensitive поиска
+
+        # Semantic Scholar: /paper/<hash-id>
+        ss_pattern = re.compile(r"semanticscholar\.org/paper/([a-f0-9]{10,40})(?:$|[^a-f0-9])")
+        match = ss_pattern.search(url)
+        if match:
+            return match.group(1)
+
+        # ArXiv: arxiv.org/abs/<id> или arxiv.org/pdf/<id>.pdf
+        arxiv_pattern = re.compile(r"arxiv\.org/(abs|pdf)/([0-9]{4}\.[0-9]{4,5})(?:\.pdf)?")
+        match = arxiv_pattern.search(url)
+        if match:
+            return f"ARXIV:{match.group(2)}"
+
+        # PubMed: pubmed.ncbi.nlm.nih.gov/<pmid>/
+        pubmed_pattern = re.compile(r"pubmed\.ncbi\.nlm\.nih\.gov/(\d+)")
+        match = pubmed_pattern.search(url)
+        if match:
+            return f"PMID:{match.group(1)}"
+
+        # PMC (PubMed Central): ncbi.nlm.nih.gov/pmc/articles/PMC<id>/
+        pmc_pattern = re.compile(r"ncbi\.nlm\.nih\.gov/pmc/articles/(pmc\d+)")
+        match = pmc_pattern.search(url)
+        if match:
+            return match.group(1).upper()
+
+        # IEEE Xplore: ieeexplore.ieee.org/document/<id>
+        ieee_pattern = re.compile(r"ieeexplore\.ieee\.org/document/(\d+)")
+        match = ieee_pattern.search(url)
+        if match:
+            return f"IEEE:{match.group(1)}"
+
+        # DOI: doi.org/<doi> или dx.doi.org/<doi>
+        doi_pattern = re.compile(r"(?:dx\.)?doi\.org/(.+)")
+        match = doi_pattern.search(url)
+        if match:
+            return f"DOI:{match.group(1)}"
+
+        return None
     
     async def get_paper_by_url(self, url: str) -> Paper:
         try:
@@ -368,10 +398,7 @@ class SemanticScholarSearcher(PaperSearcher):
             raise
         except Exception as e:
             logger.error(f"Unexpected error getting paper: {str(e)}")
-            
-    from typing import Optional, List
-
-
+            return None
 
     async def get_full_text_by_id(self, paper_id: str) -> Optional[str]:
         """
@@ -542,3 +569,69 @@ class SemanticScholarSearcher(PaperSearcher):
 
         logger.error(f"Paper not found or not accessible for id '{pid}' (candidates tried: {candidates})")
         return None
+
+    async def get_recommendation_for_single_paper(self, paper_id: str, limit:int = 10) -> Optional[List[Paper]]:
+        try:
+            url = f'https://api.semanticscholar.org/recommendations/v1/papers/forpaper/{paper_id}'
+            params = {
+                "limit": limit,
+                'fields': self.FIELD
+            }
+            resp = await self._make_request(url, params=params)
+            data = resp['recommendedPapers']
+            papers = [self._parse_paper_data(p) for p in data]
+            return papers
+        
+        except httpx.HTTPStatusError as e:
+            logger.error(f"Ошибка HTTP при получении рекомендаций для статьи '{paper_id}': {e}")
+            return None
+        
+        except Exception as e:
+            logger.error(f"Неожиданная ошибка при получении рекомендаций для статьи '{paper_id}': {e}")
+            return None
+
+    def _get_s2_paper_id(self, p: Paper) -> str:
+            pid = p.external_id
+            if p.doi:
+                pid = f'DOI:{p.doi.strip()}'
+            elif p.external_id and p.source:
+                if p.source == 'arxiv':
+                    pid = f'ARXIV:{p.external_id.strip()}'
+                elif p.source == 'pubmed' or p.source == 'ncbi':
+                    pid = f'PUBMED:{p.external_id.strip()}'
+                elif p.source == 'PMC':
+                    pid = f'PMC:{p.external_id.strip()}'
+                elif p.source == 'ieee':
+                    pid = f'IEEE:{p.external_id.strip()}'
+            elif p.url:
+                pid = self._extract_paper_id_from_url(p.url)
+            elif p.title:
+                pid = p.title.strip().lower().replace(' ', '_')[:64]
+            return pid
+    
+    async def get_recommendations_for_multiple_papers(self, papers: List[Paper], limit: int = 50):
+
+        url = "https://api.semanticscholar.org/recommendations/v1/papers"
+        paper_ids = [self._get_s2_paper_id(paper) for paper in papers]
+        import json
+        payload = json.dumps({
+            'positivePaperIds': paper_ids,
+            "negativePaperIds": [],
+        })
+        headers = {
+            "Content-Type": "application/json"
+        }
+        params = {
+            'fields': self.FIELD,
+            'limit': limit
+        }
+        async with self._client as client:
+            response = await client.post(
+                url=url, 
+                headers=headers,
+                params=params,
+                data=payload)
+            response.raise_for_status()
+            papers = response.json()['recommendedPapers']
+            papers = [self._parse_paper_data(p) for p in papers]
+            return papers

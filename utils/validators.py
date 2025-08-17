@@ -25,7 +25,9 @@ class InputValidator:
             'arxiv.org',
             'scholar.google.com',
             'pubmed.ncbi.nlm.nih.gov',
-            'doi.org'
+            'doi.org',
+            'semanticscholar.org',
+            'ieee.org'
         ]
         
     def sanitize_text(self, text: str, max_length: int = 1000) -> str:

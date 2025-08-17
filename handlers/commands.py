@@ -2,6 +2,8 @@ from aiogram import Dispatcher
 from aiogram.types import Message
 from aiogram.filters import Command
 import asyncio
+from services.search.semantic_scholar_service import SemanticScholarSearcher
+from services.utils.paper import Paper
 from utils import setup_logger, InputValidator
 from services.utils.keyboard import create_paper_keyboard
 from utils.error_handler import ErrorHandler
@@ -40,6 +42,7 @@ def register_command_handlers(dp: Dispatcher):
     dp.message.register(library_command, Command("library"))
     dp.message.register(stats_command, Command("stats")) 
     dp.message.register(help_search_command, Command("help_search"))
+    dp.message.register(recommendations_command, Command("recommendations"))
 
 
 @track_operation("start_command")
@@ -214,5 +217,72 @@ async def stats_command(message: Message, **kwargs):
     except Exception as e:
         logger.error(f"Ошибка при получении статистики: {e}")
         await ErrorHandler.handle_stats_error(message, e)
+
+@track_operation("recommendations_command")
+async def recommendations_command(message: Message, **kwargs):
+    """Команда /recommendations - показать похожие статьи"""
+    user_id = message.from_user.id
+
+    query = message.text.replace('/recommendations', '').strip()
+
+    if not query:
+        await message.answer(
+            "🔍 Готовлю рекомендации на основе вашей библиотеки..."
+        )
         
+        papers = await db.get_user_library(user_id)
+        papers = [Paper(**paper) for paper in papers]
+        if not papers:
+            await message.answer("📚 **Ваша библиотека пуста**", parse_mode="Markdown")
+            return
+
+        # Формируем и отправляем сообщения с похожими статьями
+        async with SemanticScholarSearcher() as s2_ss:
+            recommendations = await s2_ss.get_recommendations_for_multiple_papers(papers, 100)
+
+        if not recommendations:
+            await message.answer(
+                "❌ Не удалось найти похожие статьи. Попробуйте позже."
+            )
+            return
+
+        saved_urls = await SearchUtils._get_user_saved_urls(user_id)
+        
+        await SearchUtils._send_search_results(message, recommendations, 'recommendations', saved_urls)
+    else:
+        urls = query.split(' ')
+        if len(urls) > 1:
+            try:
+                async with SemanticScholarSearcher() as s2_ss:
+                    papers = [Paper(url=url) for url in urls]
+                    recommendations = await s2_ss.get_recommendations_for_multiple_papers(papers, 100)
+        
+                if not recommendations:
+                    await message.answer(
+                        "❌ Не удалось найти похожие статьи. Проверьте список ваших URLs."
+                    )
+                    return
+
+                saved_urls = await SearchUtils._get_user_saved_urls(user_id)
+                    
+                await SearchUtils._send_search_results(message, recommendations, 'recommendations', saved_urls)
+
+            except Exception as e:
+                logger.error(f"Ошибка при получении рекомендаций: {e}")
+                await message.answer("❌ Не удалось получить рекомендации. Попробуйте позже. Возможно ваши URLs слишком длинные.")
+                return
+        else:
+            async with SemanticScholarSearcher() as s2_ss:
+                id = s2_ss._extract_paper_id_from_url(urls[0])
+                recommendations = await s2_ss.get_recommendation_for_single_paper(id, 30)
+        
+            if not recommendations:
+                await message.answer(
+                    "❌ Не удалось найти похожие статьи. Проверьте ваш URL."
+                )
+                return
+
+            saved_urls = await SearchUtils._get_user_saved_urls(user_id)
+                
+            await SearchUtils._send_search_results(message, recommendations, 'recommendations', saved_urls)
 

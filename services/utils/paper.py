@@ -27,7 +27,7 @@ class Paper:
                 abstract: str = '', doi: str = '', publication_date: Optional[datetime] = None,
                 journal: str = '', keywords: List[str] = None, url: str = '',
                 external_id: str = '', source: str = '', source_metadata: Dict[str, Any] = None,
-                semantic_score: float = 0.0):
+                semantic_score: float = 0.0, tags: List[str] = None):
         self.title = title or ''
         self.authors = authors if authors is not None else []
         self.abstract = abstract or ''
@@ -84,6 +84,9 @@ class Paper:
             # Очищаем external_id от специальных символов
             clean_id = self._clean_callback_string(self.external_id)
             data = f"{prefix}:{self.source}:{clean_id}"
+        elif self.doi:
+            clean_id = self._clean_callback_string(self.doi)
+            data = f"{prefix}:doi:{clean_id}"
         elif self.url:
             # Извлекаем ID из URL
             url_parts = self.url.rstrip('/').split('/')

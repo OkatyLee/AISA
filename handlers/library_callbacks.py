@@ -1,5 +1,7 @@
+from operator import call
 from database import SQLDatabase as db
 from services.search import SearchService
+from services.search.semantic_scholar_service import SemanticScholarSearcher
 from services.utils.paper import Paper
 from services.nlp import LLMService
 from services.utils.keyboard import create_paper_keyboard 
@@ -44,6 +46,11 @@ def register_library_handlers(dp: Dispatcher):
     dp.callback_query.register(
         handle_summary,
         lambda c: c.data.startswith("summary:")
+    )
+
+    dp.callback_query.register(
+        handle_recommendations,
+        lambda c: c.data.startswith("recs:")
     )
     # Зарезервировано для будущей кнопки сравнения нескольких статей (compare:search_id:idx1,idx2,...)
     # dp.callback_query.register(handle_compare_many, lambda c: c.data.startswith("compare:"))
@@ -413,3 +420,46 @@ async def handle_summary(callback: CallbackQuery, **kwargs):
     except Exception as e:
         logger.error(f"Ошибка при суммаризации статьи: {e}")
         await ErrorHandler.handle_summarization_error(callback, e)
+        
+@track_operation("handle_recommendations")
+async def handle_recommendations(callback: CallbackQuery, **kwargs):
+    """Обработчик показа похожих статей"""
+    try:
+        user_id = callback.from_user.id
+        
+        # Парсим callback данные: recommendation:source:id или recommendation:url:id или recommendation:hash:id
+        parts = callback.data.split(":", 2)
+        if len(parts) < 3:
+            await callback.answer("❌ Неверный формат данных")
+            return
+            
+        callback_type = parts[1]  # source, url, hash
+        callback_value = parts[2]  # actual id/value
+        if callback_type == 'arxiv':
+            callback_value = f"ARXIV:{callback_value}"
+        elif callback_type == 'pubmed' or callback_type == 'ncbi':
+            callback_value = f"PMID:{callback_value}"
+        elif callback_type == 'ieee':
+            callback_value = f"IEEE:{callback_value}"
+        elif callback_type == 'doi':   
+            callback_value = f"DOI:{callback_value}"
+        elif callback_type == 'pmc':
+            callback_value = f"PMC:{callback_value}"
+
+        await callback.answer("🔍 Ищу похожие статьи...")
+        
+        async with SemanticScholarSearcher() as searcher:
+            recommendations = await searcher.get_recommendation_for_single_paper(callback_value)
+        
+        if not recommendations:
+            await callback.message.answer("❌ Похожие статьи не найдены. Попробуйте позже")
+            return
+        
+        # Получаем сохраненные статьи пользователя для проверки
+        saved_urls = await SearchUtils._get_user_saved_urls(callback.from_user.id)
+        # Отправляем результаты
+        await SearchUtils._send_search_results(callback.message, recommendations, 'recommendations', saved_urls)
+
+    except Exception as e:
+        logger.error(f"Ошибка при получении рекомендаций: {e}")
+        await callback.answer("❌ Ошибка при получении рекомендаций")
