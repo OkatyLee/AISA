@@ -208,47 +208,27 @@ class DatabaseManager:
     async def search_in_library(self, user_id: int, query: str) -> List[Dict[str, Any]]:
         try:
             with sqlite3.connect(self.db_path) as conn:
+                conn.row_factory = sqlite3.Row
                 cursor = conn.cursor()
-                cursor.execute(
-                    '''
+                
+                search_query = f"%{query}%"
+                
+                cursor.execute('''
                     SELECT * FROM saved_publications
                     WHERE user_id = ? AND (
-                        title LIKE ? OR authors LIKE ? 
-                        OR abstract LIKE ? OR tags LIKE ?
-                        OR keywords LIKE ? OR doi LIKE ?
-                        OR journal LIKE ?)
+                        title LIKE ? OR
+                        authors LIKE ? OR
+                        abstract LIKE ? OR
+                        keywords LIKE ? OR
+                        tags LIKE ? OR
+                        notes LIKE ? OR
+                        categories LIKE ?
+                    )
                     ORDER BY saved_at DESC
-                    ''', (user_id, f'%{query}%', f'%{query}%', f'%{query}%', 
-                          f'%{query}%', f'%{query}%', f'%{query}%', f'%{query}%')
-                )
-                rows = cursor.fetchall()
+                ''', (user_id, search_query, search_query, search_query, search_query, search_query, search_query, search_query))
                 
-                library = []
-                for row in rows:
-                    paper = {
-                        'id': row[0],
-                        'user_id': row[1],
-                        'external_id': row[2],
-                        'source': row[3],
-                        'title': row[4],
-                        'authors': row[5].split(', ') if row[5] else [],
-                        'url': row[6],
-                        'abstract': row[7],
-                        'doi': row[8],
-                        'journal': row[9],
-                        'publication_date': row[10],
-                        'keywords': row[11].split(', ') if row[11] else [],
-                        'saved_at': row[12],
-                        'tags': row[13].split(', ') if row[13] else [],
-                        'notes': row[14],
-                        'categories': row[15].split(', ') if row[15] else [],
-                        'source_metadata': json.loads(row[16]) if row[16] else {},
-                        # Обратная совместимость
-                        'arxiv_id': row[2] if row[3] == 'arxiv' else '',
-                        'published_date': row[10]
-                    }
-                    library.append(paper)
-                return library
+                papers = [dict(row) for row in cursor.fetchall()]
+                return papers
         except Exception as e:
             logger.error(f"Ошибка при поиске в библиотеке: {e}")
             return []
@@ -524,3 +504,31 @@ class DatabaseManager:
         except Exception as e:
             logger.error(f"Ошибка при получении статьи по хешу заголовка: {e}")
             return None
+        
+    async def edit_paper_tags(self, user_id: int, paper_id: str, new_tags: str) -> bool:
+        """
+        Изменяет теги статьи пользователя.
+        
+        Args:
+            user_id: ID пользователя
+            paper_id: ID статьи
+            new_tags: Новые теги в виде строки, разделенные запятыми
+            
+        Returns:
+            True, если теги успешно изменены, иначе False
+        """
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    '''
+                    UPDATE saved_publications
+                    SET tags = ?, categories = ?
+                    WHERE external_id = ? AND user_id = ?
+                    ''', (new_tags, new_tags, paper_id, user_id)
+                )
+                conn.commit()
+                return cursor.rowcount > 0
+        except Exception as e:
+            logger.error(f"Ошибка при изменении тегов статьи: {e}")
+            return False

@@ -37,6 +37,9 @@ app.mount("/static", StaticFiles(directory="webapp/static"), name="static")
 templates = Jinja2Templates(directory="webapp/templates")
 
 # Модели данных
+class PaperTags(BaseModel):
+    new_tags: str
+
 class UserLibrary(BaseModel):
     papers: List[Dict[str, Any]]
     total_count: int
@@ -144,14 +147,16 @@ async def get_user_info(current_user: Dict[str, Any] = Depends(get_current_user)
 async def get_user_library(
     page: int = 1,
     per_page: int = 10,
+    search: Optional[str] = None,
     current_user: Dict[str, Any] = Depends(get_current_user)
 ):
     """
-    Получение библиотеки пользователя с пагинацией
+    Получение библиотеки пользователя с пагинацией и поиском
     
     Args:
         page: Номер страницы (начиная с 1)
         per_page: Количество элементов на странице
+        search: Поисковый запрос
         current_user: Данные текущего пользователя
         
     Returns:
@@ -159,10 +164,13 @@ async def get_user_library(
     """
     try:
         user_id = current_user["user_id"]
-        logger.info(f"Запрос библиотеки для пользователя {user_id}, страница {page}")
+        logger.info(f"Запрос библиотеки для пользователя {user_id}, страница {page}, поиск: '{search}'")
         
-        # Получаем общее количество статей
-        all_papers = await db.get_user_library(user_id)
+        if search:
+            all_papers = await db.search_in_library(user_id, search)
+        else:
+            all_papers = await db.get_user_library(user_id)
+        
         total_count = len(all_papers)
         
         # Пагинация
@@ -199,18 +207,21 @@ async def get_user_library(
 
 @app.delete("/api/v1/library/{paper_id}")
 async def delete_paper_from_library(
-    paper_id: int,
+    paper_id: str,
     current_user: Dict[str, Any] = Depends(get_current_user)
 ):
     """Удаление статьи из библиотеки"""
     try:
         user_id = current_user["user_id"]
+        logger.info(f"Пользователь {user_id} пытается удалить статью {paper_id}")
+        
         success = await db.delete_paper(user_id, paper_id)
         
         if success:
-            logger.info(f"Пользователь {user_id} удалил статью {paper_id}")
+            logger.info(f"Пользователь {user_id} успешно удалил статью {paper_id}")
             return {"message": "Статья удалена", "success": True}
         else:
+            logger.warning(f"Не удалось найти статью {paper_id} для пользователя {user_id}")
             raise HTTPException(status_code=404, detail="Статья не найдена")
             
     except Exception as e:
@@ -241,6 +252,31 @@ async def get_library_stats(current_user: Dict[str, Any] = Depends(get_current_u
     except Exception as e:
         logger.error(f"Ошибка получения статистики: {e}")
         raise HTTPException(status_code=500, detail="Ошибка получения статистики")
+
+@app.post("/api/v1/library/{paper_id}/tags")
+async def edit_paper_tags(
+    paper_id: str,
+    tags_data: PaperTags,
+    current_user: Dict[str, Any] = Depends(get_current_user)
+):
+    """Изменение тегов статьи в библиотеке"""
+    try:
+        user_id = current_user["user_id"]
+        logger.info(f"Пользователь {user_id} пытается изменить теги статьи {paper_id} на '{tags_data.new_tags}'")
+        paper_id = paper_id.replace('BACKSLASH', '/')
+        
+        success = await db.edit_paper_tags(user_id, paper_id, tags_data.new_tags)
+        
+        if success:
+            logger.info(f"Пользователь {user_id} успешно изменил теги статьи {paper_id}")
+            return {"message": "Теги статьи изменены", "success": True}
+        else:
+            logger.warning(f"Не удалось найти статью {paper_id} для пользователя {user_id}")
+            raise HTTPException(status_code=404, detail="Статья не найдена")
+            
+    except Exception as e:
+        logger.error(f"Ошибка изменения тегов статьи: {e}")
+        raise HTTPException(status_code=500, detail="Ошибка изменения тегов статьи")
 
 if __name__ == "__main__":
     import uvicorn

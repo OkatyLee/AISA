@@ -109,7 +109,9 @@ class LibraryApp {
         });
         
         document.getElementById('deletePaper').addEventListener('click', () => {
-            this.deletePaper(this.currentPaper.id);
+            if (this.currentPaper) {
+                this.deletePaper(this.currentPaper.id);
+            }
         });
         
         // Кнопка "Открыть бота"
@@ -123,39 +125,43 @@ class LibraryApp {
         clearBtn.classList.toggle('visible', value.length > 0);
     }
     
-    async loadLibrary() {
+    async loadLibrary(searchQuery = '') {
+        this.showLoading(true);
         try {
-            this.showLoading(true);
-            
-            const initData = tg.initData;
-            const response = await fetch('/api/v1/library', {
+            const url = new URL('/api/v1/library', window.location.origin);
+            url.searchParams.append('page', '1');
+            url.searchParams.append('per_page', '1000'); // Загружаем все статьи для клиентской фильтрации
+            if (searchQuery) {
+                url.searchParams.append('search', searchQuery);
+            }
+
+            const response = await fetch(url, {
                 headers: {
-                    'X-Telegram-Init-Data': initData,
-                    'Content-Type': 'application/json'
+                    'X-Telegram-Init-Data': tg.initData
                 }
             });
-            
+
             if (!response.ok) {
-                throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                const errorData = await response.json();
+                throw new Error(errorData.detail || 'Не удалось загрузить библиотеку');
             }
-            
+
             const data = await response.json();
             this.allPapers = data.papers;
-            this.filteredPapers = [...this.allPapers];
             this.totalPapers = data.total_count;
+            
+            this.filteredPapers = [...this.allPapers];
             
             this.updateStats();
             this.updateCategoryFilter();
             this.displayPapers();
             this.updatePagination();
             
-            // Скрываем/показываем соответствующие элементы
-            this.toggleEmptyState(this.allPapers.length === 0);
-            
+            this.toggleEmptyState(this.totalPapers === 0);
+
         } catch (error) {
-            console.error('Ошибка загрузки библиотеки:', error);
-            this.showError('Не удалось загрузить библиотеку. Попробуйте позже.');
-            tg.showAlert('Ошибка загрузки данных');
+            this.showError(`Ошибка загрузки библиотеки: ${error.message}`);
+            this.toggleEmptyState(true);
         } finally {
             this.showLoading(false);
         }
@@ -293,14 +299,28 @@ class LibraryApp {
             </div>
             <p class="paper-abstract">${this.escapeHtml(this.truncateText(paper.abstract, 200))}</p>
             <div class="paper-actions" onclick="event.stopPropagation();">
-                <button class="action-btn view-btn" onclick="event.stopPropagation(); app.openPaperModal(${JSON.stringify(paper).replace(/"/g, '&quot;')});">
+                <button class="action-btn view-btn">
                     👁 Подробнее
                 </button>
-                <button class="action-btn delete-btn" onclick="event.stopPropagation(); app.deletePaper(${paper.id});">
+                <button class="action-btn delete-btn">
                     🗑 Удалить
                 </button>
             </div>
         `;
+        
+        // Add event listeners programmatically
+        const viewBtn = card.querySelector('.view-btn');
+        const deleteBtn = card.querySelector('.delete-btn');
+        
+        viewBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            this.openPaperModal(paper);
+        });
+        
+        deleteBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            this.deletePaper(paper.id);
+        });
         
         return card;
     }
@@ -332,7 +352,9 @@ class LibraryApp {
             </div>
             
             <div style="margin-bottom: 16px;">
-                <strong>Категории:</strong><br>
+                <strong>Категории:</strong>
+                <button id="editTagsBtn" class="action-btn" style="margin-left: 8px; padding: 2px 6px; font-size: 12px;">✏️</button>
+                <br>
                 <div style="margin-top: 8px;">${categoriesHtml}</div>
             </div>
             
@@ -348,6 +370,13 @@ class LibraryApp {
         
         modal.classList.add('visible');
         
+        // Remove any existing event listener to prevent multiple bindings
+        const editBtn = document.getElementById('editTagsBtn');
+        editBtn.replaceWith(editBtn.cloneNode(true));
+        
+        // Add event listener for the edit tags button
+        document.getElementById('editTagsBtn').addEventListener('click', () => this.editTags());
+        
         // Haptic feedback
         tg.HapticFeedback.impactOccurred('medium');
     }
@@ -359,11 +388,16 @@ class LibraryApp {
     }
     
     async deletePaper(paperId) {
+        console.log('deletePaper called with ID:', paperId);
         const result = await tg.showConfirm('Вы уверены, что хотите удалить эту статью из библиотеки?');
         
-        if (!result) return;
+        if (!result) {
+            console.log('User cancelled deletion');
+            return;
+        }
         
         try {
+            console.log('Sending delete request for paper:', paperId);
             const initData = tg.initData;
             const response = await fetch(`/api/v1/library/${paperId}`, {
                 method: 'DELETE',
@@ -373,6 +407,7 @@ class LibraryApp {
                 }
             });
             
+            console.log('Delete response status:', response.status);
             if (!response.ok) {
                 throw new Error(`HTTP ${response.status}`);
             }
@@ -398,6 +433,181 @@ class LibraryApp {
             console.error('Ошибка удаления статьи:', error);
             tg.showAlert('Не удалось удалить статью');
             tg.HapticFeedback.notificationOccurred('error');
+        }
+    }
+    
+
+    showInputDialogAsync(title, placeholder, defaultValue = '') {
+        return new Promise((resolve) => {
+            const overlay = document.createElement('div');
+            overlay.style.cssText = `
+                position: fixed;
+                top: 0;
+                left: 0;
+                width: 100%;
+                height: 100%;
+                background: rgba(0,0,0,0.5);
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                z-index: 10000;
+            `;
+
+            const dialog = document.createElement('div');
+            dialog.style.cssText = `
+                background: var(--tg-theme-bg-color, #fff);
+                color: var(--tg-theme-text-color, #000);
+                padding: 20px;
+                border-radius: 12px;
+                width: 90%;
+                max-width: 400px;
+                box-shadow: 0 4px 16px rgba(0,0,0,0.3);
+            `;
+
+            // Экранируем HTML для безопасности
+            const escapeHtml = (text) => text.replace(/[&<>"']/g, (m) => ({
+                '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+            })[m]);
+
+            dialog.innerHTML = `
+                <h3 style="margin: 0 0 15px 0; font-size: 18px;">${escapeHtml(title)}</h3>
+                <input type="text" id="inputField"
+                    placeholder="${escapeHtml(placeholder)}"
+                    style="width: 100%; padding: 12px; border: 1px solid var(--tg-theme-hint-color, #ccc); 
+                            border-radius: 8px; font-size: 16px; background: var(--tg-theme-bg-color, #fff); 
+                            color: var(--tg-theme-text-color, #000); box-sizing: border-box;">
+                <div style="margin-top: 20px; text-align: right;">
+                    <button id="cancelBtn" style="margin-right: 10px; padding: 10px 20px; 
+                            background: transparent; color: var(--tg-theme-link-color, #0088cc); 
+                            border: none; border-radius: 6px; cursor: pointer;">Отмена</button>
+                    <button id="saveBtn" style="padding: 10px 20px; 
+                            background: var(--tg-theme-button-color, #0088cc); 
+                            color: var(--tg-theme-button-text-color, #fff); 
+                            border: none; border-radius: 6px; cursor: pointer;">Сохранить</button>
+                </div>
+            `;
+
+            overlay.appendChild(dialog);
+            document.body.appendChild(overlay);
+
+            const input = dialog.querySelector('#inputField');
+            
+            // ВАЖНО: устанавливаем значение после добавления в DOM
+            input.value = defaultValue;
+            input.focus();
+            
+            // Выделяем весь текст для удобства редактирования
+            if (defaultValue) {
+                input.select();
+            }
+
+            // Остальной код обработчиков...
+            const closeDialog = () => {
+                if (document.body.contains(overlay)) {
+                    document.body.removeChild(overlay);
+                }
+            };
+
+            dialog.querySelector('#saveBtn').onclick = () => {
+                resolve(input.value);
+                closeDialog();
+            };
+
+            dialog.querySelector('#cancelBtn').onclick = () => {
+                resolve(null);
+                closeDialog();
+            };
+
+            input.onkeydown = (e) => {
+                if (e.key === 'Enter') {
+                    resolve(input.value);
+                    closeDialog();
+                }
+                if (e.key === 'Escape') {
+                    resolve(null);
+                    closeDialog();
+                }
+            };
+
+            overlay.onclick = (e) => {
+                if (e.target === overlay) {
+                    resolve(null);
+                    closeDialog();
+                }
+            };
+        });
+    }
+
+
+
+
+    async editTags() {
+        console.log('editTags called');
+        if (!this.currentPaper) {
+            console.log('No current paper selected');
+            return;
+        }
+
+        const currentTags = this.currentPaper.categories ? this.currentPaper.categories.join(', ') : '';
+        console.log('Current tags:', currentTags);
+        
+        // Use standard prompt instead of tg.showPrompt
+        const newTagsStr = await this.showInputDialogAsync(
+            'Редактирование тегов',
+            currentTags ? 'Измените теги или добавьте новые' : 'Введите теги через запятую',
+            currentTags
+        );
+        console.log('User input:', newTagsStr);
+        
+        if (newTagsStr === null) return;
+
+        // Сравниваем с текущими для оптимизации
+        if (newTagsStr.trim() === currentTags.trim()) {
+            console.log('Теги не изменились');
+            return;
+        }
+
+        try {
+            const encodedExternalId = this.currentPaper.external_id.replace('/', 'BACKSLASH');
+            console.log('Sending request to update tags for paper:', encodedExternalId);
+
+            const response = await fetch(`/api/v1/library/${encodedExternalId}/tags`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-Telegram-Init-Data': tg.initData
+                },
+                body: JSON.stringify({ new_tags: newTagsStr })
+            });
+
+            console.log('Response status:', response.status);
+            if (!response.ok) {
+                const errorData = await response.json();
+                throw new Error(errorData.detail || 'Не удалось обновить теги');
+            }
+
+            tg.showAlert('Теги успешно обновлены!');
+            
+            // Update UI
+            this.currentPaper.categories = newTagsStr.split(',').map(t => t.trim()).filter(t => t);
+            this.openPaperModal(this.currentPaper); // Re-open modal to show changes
+            
+            // Also update the main list
+            const paperInList = this.allPapers.find(p => p.id === this.currentPaper.id);
+            if (paperInList) {
+                paperInList.categories = this.currentPaper.categories;
+            }
+            const paperInFilteredList = this.filteredPapers.find(p => p.id === this.currentPaper.id);
+            if (paperInFilteredList) {
+                paperInFilteredList.categories = this.currentPaper.categories;
+            }
+
+            this.displayPapers(); // Redraw paper list
+            this.updateCategoryFilter(); // Update category filter with new tags
+
+        } catch (error) {
+            console.error('Error updating tags:', error);
+            this.showError(`Ошибка при обновлении тегов: ${error.message}`);
         }
     }
     
