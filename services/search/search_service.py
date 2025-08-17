@@ -543,7 +543,7 @@ class SearchService:
                     doi=paper_data.get('doi', paper_data.get('DOI', '')),
                     publication_date=datetime.fromisoformat(paper_data.get('publication_date')),
                     journal=paper_data.get('journal', ''),
-                    keywords=paper_data.get('keywords', []),
+                    tags=paper_data.get('tags', []),
                     url=paper_data.get('url', ''),
                     external_id=paper_data.get('external_id', ''),
                     source=paper_data.get('source', ''),

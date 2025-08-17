@@ -74,8 +74,8 @@ class LibraryApp {
         });
         
         // Фильтры
-        document.getElementById('categoryFilter').addEventListener('change', (e) => {
-            this.handleCategoryFilter(e.target.value);
+        document.getElementById('tagFilter').addEventListener('change', (e) => {
+            this.handletagFilter(e.target.value);
         });
         
         document.getElementById('sortFilter').addEventListener('change', (e) => {
@@ -110,7 +110,7 @@ class LibraryApp {
         
         document.getElementById('deletePaper').addEventListener('click', () => {
             if (this.currentPaper) {
-                this.deletePaper(this.currentPaper.id);
+                this.deletePaper(this.currentPaper.external_id);
             }
         });
         
@@ -153,7 +153,7 @@ class LibraryApp {
             this.filteredPapers = [...this.allPapers];
             
             this.updateStats();
-            this.updateCategoryFilter();
+            this.updateTagFilter();
             this.displayPapers();
             this.updatePagination();
             
@@ -184,24 +184,24 @@ class LibraryApp {
         document.getElementById('totalPapers').textContent = this.totalPapers;
     }
     
-    updateCategoryFilter() {
-        const categoryFilter = document.getElementById('categoryFilter');
-        const categories = new Set();
+    updateTagFilter() {
+        const tagFilter = document.getElementById('tagFilter');
+        const tags = new Set();
         
         this.allPapers.forEach(paper => {
-            if (paper.categories) {
-                paper.categories.forEach(cat => categories.add(cat));
+            if (paper.tags) {
+                paper.tags.forEach(tag => tags.add(tag));
             }
         });
         
         // Очищаем и добавляем опции
-        categoryFilter.innerHTML = '<option value="">Все категории</option>';
-        
-        [...categories].sort().forEach(category => {
+        tagFilter.innerHTML = '<option value="">Все теги</option>';
+
+        [...tags].sort().forEach(tag => {
             const option = document.createElement('option');
-            option.value = category;
-            option.textContent = category;
-            categoryFilter.appendChild(option);
+            option.value = tag;
+            option.textContent = tag;
+            tagFilter.appendChild(option);
         });
     }
     
@@ -223,12 +223,12 @@ class LibraryApp {
         this.updatePagination();
     }
     
-    handleCategoryFilter(category) {
-        if (!category) {
+    handletagFilter(tag) {
+        if (!tag) {
             this.filteredPapers = [...this.allPapers];
         } else {
             this.filteredPapers = this.allPapers.filter(paper => 
-                paper.categories && paper.categories.includes(category)
+                paper.tags && paper.tags.includes(tag)
             );
         }
         
@@ -278,8 +278,8 @@ class LibraryApp {
         card.className = 'paper-card';
         card.onclick = () => this.openPaperModal(paper);
         
-        const categoriesHtml = paper.categories 
-            ? paper.categories.map(cat => `<span class="category-tag">${cat}</span>`).join('')
+        const tagsHtml = paper.tags 
+            ? paper.tags.map(tag => `<span class="category-tag">${tag}</span>`).join('')
             : '';
         
         const publishedDate = paper.publication_date 
@@ -295,7 +295,7 @@ class LibraryApp {
             <div class="paper-authors">${this.escapeHtml(paper.authors)}</div>
             <div class="paper-meta">
                 <span class="paper-date">📅 ${publishedDate}</span>
-                <div class="paper-categories">${categoriesHtml}</div>
+                <div class="paper-tags">${tagsHtml}</div>
             </div>
             <p class="paper-abstract">${this.escapeHtml(this.truncateText(paper.abstract, 200))}</p>
             <div class="paper-actions" onclick="event.stopPropagation();">
@@ -319,7 +319,7 @@ class LibraryApp {
         
         deleteBtn.addEventListener('click', (e) => {
             e.stopPropagation();
-            this.deletePaper(paper.id);
+            this.deletePaper(paper.external_id);
         });
         
         return card;
@@ -337,8 +337,8 @@ class LibraryApp {
             ? new Date(paper.publication_date).toLocaleDateString('ru-RU')
             : 'Дата не указана';
             
-        const categoriesHtml = paper.categories 
-            ? paper.categories.map(cat => `<span class="category-tag">${cat}</span>`).join('')
+        const tagsHtml = paper.tags 
+            ? paper.tags.map(cat => `<span class="category-tag">${cat}</span>`).join('')
             : 'Без категории';
         
         modalBody.innerHTML = `
@@ -355,7 +355,7 @@ class LibraryApp {
                 <strong>Категории:</strong>
                 <button id="editTagsBtn" class="action-btn" style="margin-left: 8px; padding: 2px 6px; font-size: 12px;">✏️</button>
                 <br>
-                <div style="margin-top: 8px;">${categoriesHtml}</div>
+                <div style="margin-top: 8px;">${tagsHtml}</div>
             </div>
             
             <div style="margin-bottom: 16px;">
@@ -389,8 +389,22 @@ class LibraryApp {
     
     async deletePaper(paperId) {
         console.log('deletePaper called with ID:', paperId);
-        const result = await tg.showConfirm('Вы уверены, что хотите удалить эту статью из библиотеки?');
-        
+        const showConfirm = (message => {
+            return new Promise((resolve) => {
+                tg.showPopup({
+                title: "Подтвердить",
+                message,
+                buttons: [
+                    {id: 'ok', type: 'default', text: 'ОК'},
+                    {id: 'cancel', type: 'cancel', text: 'Отмена'}
+                ]
+                }, (buttonId) => {
+                resolve(buttonId === 'ok');
+                });
+            });
+            })
+        const result = await showConfirm('Вы уверены, что хотите удалить эту статью из библиотеки?')
+        console.log(result)
         if (!result) {
             console.log('User cancelled deletion');
             return;
@@ -413,8 +427,8 @@ class LibraryApp {
             }
             
             // Удаляем из локального массива
-            this.allPapers = this.allPapers.filter(paper => paper.id !== paperId);
-            this.filteredPapers = this.filteredPapers.filter(paper => paper.id !== paperId);
+            this.allPapers = this.allPapers.filter(paper => paper.external_id !== paperId);
+            this.filteredPapers = this.filteredPapers.filter(paper => paper.external_id !== paperId);
             this.totalPapers--;
             
             // Обновляем интерфейс
@@ -548,7 +562,7 @@ class LibraryApp {
             return;
         }
 
-        const currentTags = this.currentPaper.categories ? this.currentPaper.categories.join(', ') : '';
+        const currentTags = this.currentPaper.tags ? this.currentPaper.tags.join(', ') : '';
         console.log('Current tags:', currentTags);
         
         // Use standard prompt instead of tg.showPrompt
@@ -589,21 +603,21 @@ class LibraryApp {
             tg.showAlert('Теги успешно обновлены!');
             
             // Update UI
-            this.currentPaper.categories = newTagsStr.split(',').map(t => t.trim()).filter(t => t);
+            this.currentPaper.tags = newTagsStr.split(',').map(t => t.trim()).filter(t => t);
             this.openPaperModal(this.currentPaper); // Re-open modal to show changes
             
             // Also update the main list
             const paperInList = this.allPapers.find(p => p.id === this.currentPaper.id);
             if (paperInList) {
-                paperInList.categories = this.currentPaper.categories;
+                paperInList.tags = this.currentPaper.tags;
             }
             const paperInFilteredList = this.filteredPapers.find(p => p.id === this.currentPaper.id);
             if (paperInFilteredList) {
-                paperInFilteredList.categories = this.currentPaper.categories;
+                paperInFilteredList.tags = this.currentPaper.tags;
             }
 
             this.displayPapers(); // Redraw paper list
-            this.updateCategoryFilter(); // Update category filter with new tags
+            this.updateTagFilter(); // Update tag filter with new tags
 
         } catch (error) {
             console.error('Error updating tags:', error);

@@ -189,7 +189,7 @@ async def get_user_library(
                 "url": paper.get("url", ""),
                 "publication_date": paper.get("publication_date", ""),
                 "saved_at": paper.get("saved_at", ""),
-                "categories": paper.get("categories", []),
+                "tags": paper.get("tags", []),
                 "external_id": paper.get("external_id", ""),
                 "source": paper.get("source", "Неизвестный источник"),
                 

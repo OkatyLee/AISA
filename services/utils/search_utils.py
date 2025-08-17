@@ -441,9 +441,9 @@ class SearchUtils:
         from datetime import datetime
         pub_date = paper.publication_date.date().isoformat() if isinstance(paper.publication_date, datetime) else paper.publication_date
         date = f'Опубликовано: {pub_date}' if pub_date else 'Дата публикации не указана'
-        keywords = ''
-        if paper.keywords:
-            keywords = ', '.join(paper.keywords[:3])
+        tags = ''
+        if paper.tags:
+            tags = ', '.join(paper.tags[:3])
 
         summary = f"📄 {paper.abstract[:200]}..."
 
@@ -452,7 +452,7 @@ class SearchUtils:
         
         # Собираем всё вместе
         parts = [title, authors, date]
-        if keywords:
-            parts.append(keywords)
+        if tags:
+            parts.append(tags)
         parts.extend([summary, url])
         return '\n'.join(parts)

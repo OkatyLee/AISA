@@ -25,16 +25,16 @@ class Paper:
     """
     def __init__(self, title: str = '', authors: List[str] = None,
                 abstract: str = '', doi: str = '', publication_date: Optional[datetime] = None,
-                journal: str = '', keywords: List[str] = None, url: str = '',
+                journal: str = '', tags: List[str] = None, url: str = '',
                 external_id: str = '', source: str = '', source_metadata: Dict[str, Any] = None,
-                semantic_score: float = 0.0, tags: List[str] = None):
+                semantic_score: float = 0.0, **kwargs):
         self.title = title or ''
         self.authors = authors if authors is not None else []
         self.abstract = abstract or ''
         self.doi = doi or ''
         self.publication_date = publication_date
         self.journal = journal or ''
-        self.keywords = keywords if keywords is not None else []
+        self.tags = tags if tags is not None else []
         self.url = url or ''
         self.external_id = external_id or ''
         self.source = source or ''
@@ -49,7 +49,7 @@ class Paper:
             "doi": self.doi,
             "publication_date": self.publication_date,
             "journal": self.journal,
-            "keywords": self.keywords,
+            "tags": self.tags,
             "url": self.url,
             "external_id": self.external_id,
             "source": self.source,

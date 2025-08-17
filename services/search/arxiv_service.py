@@ -266,9 +266,9 @@ class ArxivSearcher(PaperSearcher):
             term = category.get('term')
             if term:
                 categories.append(term)
-        paper.keywords = categories
-        if paper.keywords:
-            paper.journal = f"arXiv:{paper.keywords[0]}"
+        paper.tags = categories
+        if paper.tags:
+            paper.journal = f"arXiv:{paper.tags[0]}"
         return paper
 
     async def get_paper_by_url(self, url: str, truncate_abstract: bool = True) -> Optional[Paper]:

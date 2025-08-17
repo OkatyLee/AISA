@@ -1,9 +1,7 @@
 
 from datetime import datetime
-from urllib.parse import quote, urlparse
-
+from urllib.parse import quote
 import fitz
-from numpy import isin
 from services.utils.paper import Paper, PaperSearcher
 import httpx
 from dateutil.parser import parse
@@ -21,7 +19,7 @@ logger = setup_logger(
 class SemanticScholarSearcher(PaperSearcher):
 
     BASE_URL = "https://api.semanticscholar.org/graph/v1"
-    FIELD = "title,authors,abstract,publicationDate,journal,venue,url,externalIds,year"
+    FIELD = "title,authors,abstract,publicationDate,journal,venue,url,externalIds,year,fieldsOfStudy"
     DOI_REGEX = re.compile(r'^(10\.\d{4,9}/[-._;()/:A-Z0-9]+)$', re.IGNORECASE)
 
     def __init__(self):
@@ -139,7 +137,6 @@ class SemanticScholarSearcher(PaperSearcher):
             journal = paper_data["journal"].get("name")
         elif paper_data.get("venue"):
             journal = paper_data["venue"]
-        
         # Определение источника и внешнего ID
         external_id = None
         source = None
@@ -164,6 +161,7 @@ class SemanticScholarSearcher(PaperSearcher):
                 external_id = external_ids["DOI"]
             
             source_metadata = external_ids
+        logger.info(paper_data.get('fieldsOfStudy'))
         return Paper(
             title=paper_data.get("title", ""),
             authors=authors,
@@ -171,7 +169,7 @@ class SemanticScholarSearcher(PaperSearcher):
             doi=paper_data.get("doi") or external_ids.get("DOI"),
             publication_date=publication_date,
             journal=journal,
-            keywords=paper_data.get("fieldsOfStudy", []),
+            tags=paper_data.get("fieldsOfStudy", []),
             url=paper_data.get("url"),
             external_id=external_id,
             source=source,

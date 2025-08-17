@@ -78,9 +78,9 @@ class DatabaseManager:
     def _generate_paper_id(self, paper: Dict[str, Any]) -> str:
         """Генерация уникального ID для статьи на основе URL"""
         return hashlib.md5(paper['url'].encode()).hexdigest()
-    
-    async def save_paper(self, user_id: int, paper: Dict[str, Any], tags: List[str] = None) -> bool:
-        
+
+    async def save_paper(self, user_id: int, paper: Dict[str, Any]) -> bool:
+
         try:
             with sqlite3.connect(self.db_path) as conn:
                 cursor = conn.cursor()
@@ -90,7 +90,6 @@ class DatabaseManager:
                     WHERE user_id = ? AND external_id = ?
                     ''', (user_id, paper['external_id'])
                 )
-                
                 if cursor.fetchone():
                     return False
                 pub_date = paper.get('publication_date', paper.get('published_date', ''))
@@ -115,7 +114,7 @@ class DatabaseManager:
                         paper.get('journal', ''),
                         pub_date,
                         ', '.join(paper.get('keywords', [])),
-                        ', '.join(tags) if tags else '',
+                        ', '.join(paper.get('tags', [])),
                         ', '.join(paper.get('categories', [])),
                         json.dumps(paper.get('source_metadata', {}))
                     )
@@ -233,14 +232,14 @@ class DatabaseManager:
             logger.error(f"Ошибка при поиске в библиотеке: {e}")
             return []
         
-    async def delete_paper(self, user_id: int, paper_id: int) -> bool:
+    async def delete_paper(self, user_id: int, paper_id: str) -> bool:
         try:
             with sqlite3.connect(self.db_path) as conn:
                 cursor = conn.cursor()
                 cursor.execute(
                     '''
                     DELETE FROM saved_publications
-                    WHERE id = ? AND user_id = ?
+                    WHERE external_id = ? AND user_id = ?
                     ''', (paper_id, user_id)
                 )
                 conn.commit()

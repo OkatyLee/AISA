@@ -206,7 +206,7 @@ class NCBISearcher(PaperSearcher):
             if keyword_list is not None:
                 for keyword in keyword_list.findall('Keyword'):
                     if keyword.text:
-                        paper.keywords.append(keyword.text)
+                        paper.tags.append(keyword.text)
             
             return paper
             
