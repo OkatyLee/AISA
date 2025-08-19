@@ -43,6 +43,8 @@ def register_command_handlers(dp: Dispatcher):
     dp.message.register(stats_command, Command("stats")) 
     dp.message.register(help_search_command, Command("help_search"))
     dp.message.register(recommendations_command, Command("recommendations"))
+    dp.message.register(app_features_command, Command("features"))
+    dp.message.register(app_demo_command, Command("demo"))
 
 
 @track_operation("start_command")
@@ -60,18 +62,18 @@ async def help_command(message: Message, **kwargs):
 @track_operation("library_command")
 async def library_command(message: Message, **kwargs):
     """
-    Команда /library - просмотр сохраненных статей через Mini App
+    Команда /library - просмотр сохраненных статей через расширенное Mini App
     """
     try:
         config = load_config()
         
         # URL Mini App (в production должен быть HTTPS)
-        webapp_url = config.WEBAPP_URL  # Замените на ваш URL
+        webapp_url = config.WEBAPP_URL
         
         # Создаем клавиатуру с кнопкой Mini App
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(
-                text="📚 Открыть библиотеку", 
+                text="� Научный ассистент", 
                 web_app=WebAppInfo(url=webapp_url)
             )],
             [InlineKeyboardButton(
@@ -82,43 +84,48 @@ async def library_command(message: Message, **kwargs):
         
         # Получаем краткую статистику
         user_id = message.from_user.id
-        library = await db.get_user_library(user_id)
+        library = await db.get_library_status(user_id)
         
         if not library:
-            msg = f"📚 **Ваша библиотека пуста**\n\n" \
-                f"🔍 Используйте команду `/search <запрос>` для поиска статей\n" \
-                f"💾 Сохраняйте интересные статьи нажатием кнопки \"Сохранить\"\n\n" \
-                f"👇 Или откройте библиотеку для удобного просмотра:"
-            
-            await message.answer(
-                msg,
-                reply_markup=keyboard,
-                parse_mode="Markdown"
+            msg = (
+                f"� **Добро пожаловать в расширенное Mini App!**\n\n"
+                f"🆕 **Новые возможности:**\n"
+                f"� Управление библиотекой\n"
+                f"🔍 Продвинутый поиск статей\n"
+                f"🎯 Персональные рекомендации\n"
+                f"� AI-ассистент с NLP\n"
+                f"🏷️ Интеллектуальные теги\n\n"
+                f"Ваша библиотека пока пуста. Используйте поиск или чат для нахождения статей!\n\n"
+                f"👇 Откройте приложение:"
             )
-            return
+        else:
+            msg = (
+                f"🚀 **Научный ассистент** - теперь с расширенными возможностями!\n\n"
+                f"📚 **Ваша библиотека: {library['total_papers']} статей**\n\n"
+                f"🆕 **Новые функции в Mini App:**\n"
+                f"🔍 **Умный поиск** - по всем научным базам\n"
+                f"🎯 **Рекомендации** - персональные предложения\n"
+                f"💬 **AI-чат** - понимает естественный язык\n"
+                f"� **Аналитика** - статистика по тегам и авторам\n"
+                f"🏷️ **Теги** - организация и фильтрация\n\n"
+            )
+
+            if library.get('popular_tags'):
+                msg += "📂 **Популярные теги:**\n"
+                for tag, count in library['popular_tags'][:3]:
+                    msg += f"• {tag}: {count} статей\n"
+                msg += "\n"
         
-        # Подсчитываем категории
-        categories = {}
-        for paper in library:
-            if paper.get("categories"):
-                for cat in paper["categories"]:
-                    cat = cat.strip()
-                    categories[cat] = categories.get(cat, 0) + 1
-        
-        # Формируем сообщение со статистикой
-        stats_text = f"📚 **Ваша библиотека: {len(library)} статей**\n\n"
-        
-        if categories:
-            stats_text += "📂 **Популярные категории:**\n"
-            sorted_cats = sorted(categories.items(), key=lambda x: x[1], reverse=True)[:5]
-            for cat, count in sorted_cats:
-                stats_text += f"• {cat}: {count} статей\n"
-            stats_text += "\n"
-        
-        stats_text += "👇 Откройте библиотеку для удобного просмотра и управления статьями:"
+            if library.get('popular_authors'):
+                msg += "👨‍🔬 **Популярные авторы:**\n"
+                for author, count in library['popular_authors'][:3]:
+                    msg += f"• {author}: {count} статей\n"
+                msg += "\n"
+
+            msg += "👇 Откройте расширенный ассистент:"
         
         await message.answer(
-            stats_text,
+            msg,
             reply_markup=keyboard,
             parse_mode="Markdown"
         )
@@ -285,4 +292,77 @@ async def recommendations_command(message: Message, **kwargs):
             saved_urls = await SearchUtils._get_user_saved_urls(user_id)
                 
             await SearchUtils._send_search_results(message, recommendations, 'recommendations', saved_urls)
+
+
+@track_operation("app_features_command")
+async def app_features_command(message: Message, **kwargs):
+    """Команда /features - показать новые возможности Mini App"""
+    features_text = (
+        "🚀 **Новые возможности Научного ассистента**\n\n"
+        
+        "🔍 **Умный поиск статей:**\n"
+        "• Поиск по всем научным базам (ArXiv, IEEE, PubMed, Semantic Scholar)\n"
+        "• Продвинутые фильтры (автор, год, источник)\n"
+        "• Автоматическое определение лучших источников\n\n"
+        
+        "💬 **AI-Чат ассистент:**\n"
+        "• Понимает естественный язык\n"
+        "• Обработка контекстных запросов\n"
+        "• Интеллектуальные рекомендации\n"
+        "• Помощь в формулировке запросов\n\n"
+        
+        "🎯 **Персональные рекомендации:**\n"
+        "• На основе вашей библиотеки\n"
+        "• Семантический анализ интересов\n"
+        "• Актуальные статьи в вашей области\n\n"
+        
+        "📚 **Расширенная библиотека:**\n"
+        "• Интеллектуальные теги\n"
+        "• Гибкая фильтрация и сортировка\n"
+        "• Статистика и аналитика\n"
+        "• Быстрый поиск по содержимому\n\n"
+        
+        "🏷️ **Управление тегами:**\n"
+        "• Автоматическая категоризация\n"
+        "• Редактирование тегов\n"
+        "• Группировка по тематикам\n\n"
+        
+        "**Попробуйте команду /demo для интерактивной демонстрации!**"
+    )
+    
+    await message.answer(features_text, parse_mode="Markdown")
+
+@track_operation("app_demo_command") 
+async def app_demo_command(message: Message, **kwargs):
+    """Команда /demo - интерактивная демонстрация"""
+    config = load_config()
+    webapp_url = config.WEBAPP_URL
+    
+    demo_keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(
+            text="🚀 Открыть Demo Mini App", 
+            web_app=WebAppInfo(url=webapp_url)
+        )],
+        [InlineKeyboardButton(text="🔍 Попробовать поиск", callback_data="demo_search"),
+         InlineKeyboardButton(text="💬 Тест чат", callback_data="demo_chat")],
+        [InlineKeyboardButton(text="🎯 Рекомендации", callback_data="demo_recommendations"),
+         InlineKeyboardButton(text="📊 Статистика", callback_data="demo_stats")]
+    ])
+    
+    demo_text = (
+        "🎮 **Интерактивная демонстрация**\n\n"
+        "Выберите что хотите попробовать:\n\n"
+        "🚀 **Mini App** - полнофункциональное приложение\n"
+        "🔍 **Поиск** - найти статьи прямо сейчас\n" 
+        "💬 **Чат** - пообщаться с AI-ассистентом\n"
+        "🎯 **Рекомендации** - получить предложения\n"
+        "📊 **Статистика** - посмотреть аналитику\n\n"
+        "**Или просто напишите что вас интересует!**"
+    )
+    
+    await message.answer(
+        demo_text,
+        reply_markup=demo_keyboard,
+        parse_mode="Markdown"
+    )
 

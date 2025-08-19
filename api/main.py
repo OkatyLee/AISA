@@ -15,10 +15,22 @@ from config.config import load_config
 import logging
 from utils import setup_logger
 
-# Настройка логирования
-logger = setup_logger(name="api_logger", log_file="logs/api.log", level=logging.INFO)
+# Импорты для новой функциональности
+from services.search import SearchService
+from services.search.arxiv_service import ArxivSearcher
+from services.search.semantic_scholar_service import SemanticScholarSearcher
+from services.search.ieee_service import IEEESearcher
+from services.search.ncbi_service import NCBISearcher
+from services.utils.paper import Paper
+from nlp.intent_classifier import RuleBasedIntentClassifier
+from nlp.entity_classifier import RuleBasedEntityExtractor
+from services.utils.search_utils import SearchUtils
+import asyncio
 
-app = FastAPI(title="Scientific Assistant API", version="0.4.0")
+# Настройка логирования
+logger = setup_logger(name="api_logger", log_file="logs/api.log", level=logging.DEBUG)
+
+app = FastAPI(title="Scientific Assistant API", version="1.0.0")
 
 # Конфигурация
 config = load_config()
@@ -50,6 +62,20 @@ class TelegramInitData(BaseModel):
     username: Optional[str] = None
     first_name: Optional[str] = None
     last_name: Optional[str] = None
+
+class SearchRequest(BaseModel):
+    query: str
+    filters: Optional[Dict[str, Any]] = {}
+    limit: int = 10
+    source: Optional[str] = None  # arxiv, ieee, ncbi, semantic_scholar
+
+class RecommendationRequest(BaseModel):
+    paper_ids: List[str]
+    limit: int = 10
+
+class ChatRequest(BaseModel):
+    message: str
+    context: Optional[List[Dict[str, Any]]] = []
 
 def validate_telegram_init_data(init_data: str) -> Optional[Dict[str, Any]]:
     """
@@ -277,6 +303,244 @@ async def edit_paper_tags(
     except Exception as e:
         logger.error(f"Ошибка изменения тегов статьи: {e}")
         raise HTTPException(status_code=500, detail="Ошибка изменения тегов статьи")
+
+# Новые эндпоинты для расширенной функциональности
+
+@app.post("/api/v1/search")
+async def search_papers(
+    search_request: SearchRequest,
+    current_user: Dict[str, Any] = Depends(get_current_user)
+):
+    """
+    Поиск научных статей через различные источники
+    """
+    try:
+        user_id = current_user["user_id"]
+        logger.info(f"Пользователь {user_id} ищет: '{search_request.query}'")
+        
+        results = []
+        
+        if search_request.source == "arxiv":
+            async with ArxivSearcher() as searcher:
+                papers = await searcher.search_papers(
+                    search_request.query, 
+                    limit=search_request.limit,
+                    filters=search_request.filters
+                )
+                results = papers
+        elif search_request.source == "ieee":
+            async with IEEESearcher() as searcher:
+                papers = await searcher.search_papers(
+                    search_request.query,
+                    limit=search_request.limit,
+                    filters=search_request.filters
+                )
+                results = papers
+        elif search_request.source == "ncbi":
+            async with NCBISearcher() as searcher:
+                papers = await searcher.search_papers(
+                    search_request.query,
+                    limit=search_request.limit,
+                    filters=search_request.filters
+                )
+                results = papers
+        elif search_request.source == "semantic_scholar":
+            async with SemanticScholarSearcher() as searcher:
+                papers = await searcher.search_papers(
+                    search_request.query,
+                    limit=search_request.limit,
+                    filters=search_request.filters
+                )
+                results = papers
+        else:
+            # Универсальный поиск по всем источникам
+            async with SearchService() as search_service:
+                search_results = await search_service.search_papers(
+                    search_request.query,
+                    limit=search_request.limit,
+                    filters=search_request.filters
+                )
+                results = search_service.aggregate_results(search_results, search_request.query)
+        
+        # Проверяем, какие статьи уже сохранены
+        saved_urls = await SearchUtils._get_user_saved_urls(user_id)
+        
+        # Форматируем результаты для фронтенда
+        formatted_results = []
+        for paper in results:
+            paper_dict = paper.to_dict() if hasattr(paper, 'to_dict') else paper.__dict__
+            paper_dict['is_saved'] = paper_dict.get('url', '') in saved_urls
+            formatted_results.append(paper_dict)
+        
+        return {
+            "papers": formatted_results,
+            "total_count": len(formatted_results),
+            "query": search_request.query,
+            "source": search_request.source or "all"
+        }
+        
+    except Exception as e:
+        logger.error(f"Ошибка поиска: {e}")
+        raise HTTPException(status_code=500, detail="Ошибка выполнения поиска")
+
+@app.post("/api/v1/recommendations")
+async def get_recommendations(
+    recommendation_request: RecommendationRequest,
+    current_user: Dict[str, Any] = Depends(get_current_user)
+):
+    """
+    Получение рекомендаций на основе статей из библиотеки
+    """
+    try:
+        user_id = current_user["user_id"]
+        logger.info(f"Пользователь {user_id} запрашивает рекомендации")
+        
+        if recommendation_request.paper_ids:
+            # Рекомендации на основе переданных ID
+            papers = [Paper(external_id=paper_id) for paper_id in recommendation_request.paper_ids]
+            async with SemanticScholarSearcher() as searcher:
+                recommendations = await searcher.get_recommendations_for_multiple_papers(
+                    papers, 
+                    recommendation_request.limit
+                )
+        else:
+            # Рекомендации на основе библиотеки пользователя
+            user_papers = await db.get_user_library(user_id)
+            if not user_papers:
+                return {"papers": [], "total_count": 0, "message": "Библиотека пуста"}
+            
+            papers = [Paper(**paper) for paper in user_papers[:10]]  # Берем последние 10 статей
+            async with SemanticScholarSearcher() as searcher:
+                recommendations = await searcher.get_recommendations_for_multiple_papers(
+                    papers, 
+                    recommendation_request.limit
+                )
+        
+        # Проверяем, какие статьи уже сохранены
+        saved_urls = await SearchUtils._get_user_saved_urls(user_id)
+        
+        # Форматируем результаты
+        formatted_results = []
+        for paper in recommendations:
+            paper_dict = paper.to_dict() if hasattr(paper, 'to_dict') else paper.__dict__
+            paper_dict['is_saved'] = paper_dict.get('url', '') in saved_urls
+            formatted_results.append(paper_dict)
+        
+        return {
+            "papers": formatted_results,
+            "total_count": len(formatted_results)
+        }
+        
+    except Exception as e:
+        logger.error(f"Ошибка получения рекомендаций: {e}")
+        raise HTTPException(status_code=500, detail="Ошибка получения рекомендаций")
+
+@app.post("/api/v1/chat")
+async def chat_with_assistant(
+    chat_request: ChatRequest,
+    current_user: Dict[str, Any] = Depends(get_current_user)
+):
+    """
+    Чат с AI ассистентом для обработки естественного языка
+    """
+    try:
+        user_id = current_user["user_id"]
+        logger.info(f"Пользователь {user_id} отправил сообщение: '{chat_request.message}'")
+        
+        # Инициализируем классификатор намерений
+        intent_classifier = RuleBasedIntentClassifier()
+        entity_extractor = RuleBasedEntityExtractor()
+        
+        # Определяем намерение
+        intent_result = intent_classifier.classify(chat_request.message)
+        entities = await entity_extractor.extract(chat_request.message, None)
+
+        response = {
+            "intent": intent_result.intent.value,
+            "confidence": intent_result.confidence,
+            "entities": entities,
+            "response_text": "",
+            "action": None,
+            "data": {}
+        }
+        
+        # Обрабатываем намерения
+        if intent_result.intent.value == "search":
+            query = entities.get("query", chat_request.message)
+            response["action"] = "search"
+            response["data"] = {
+                "query": query,
+                "filters": {
+                    "author": entities.get("author"),
+                    "year": entities.get("year"),
+                    "journal": entities.get("journal")
+                }
+            }
+            response["response_text"] = f"Ищу статьи по запросу: {query}"
+            
+        elif intent_result.intent.value == "list_saved":
+            response["action"] = "show_library"
+            response["response_text"] = "Показываю вашу библиотеку статей"
+            
+        elif intent_result.intent.value == "get_summary":
+            urls = entities.get("urls", [])
+            if urls:
+                response["action"] = "summarize"
+                response["data"] = {"urls": urls}
+                response["response_text"] = f"Готовлю краткое изложение статьи: {urls[0]}"
+            else:
+                response["response_text"] = "Пожалуйста, предоставьте ссылку на статью для создания резюме"
+                
+        elif intent_result.intent.value == "help":
+            response["response_text"] = (
+                "Я могу помочь вам:\n"
+                "🔍 Искать научные статьи\n"
+                "📚 Управлять библиотекой\n"
+                "🎯 Получать рекомендации\n"
+                "📄 Создавать резюме статей\n\n"
+                "Просто напишите, что вас интересует!"
+            )
+            
+        elif intent_result.intent.value == "greeting":
+            response["response_text"] = (
+                "Привет! Я ваш научный ассистент. "
+                "Я помогу найти и организовать научные статьи. "
+                "Что вас интересует?"
+            )
+            
+        else:
+            response["response_text"] = (
+                "Я не совсем понял ваш запрос. "
+                "Попробуйте спросить о поиске статей, библиотеке или помощи."
+            )
+        
+        return response
+        
+    except Exception as e:
+        logger.error(f"Ошибка обработки чата: {e}")
+        raise HTTPException(status_code=500, detail="Ошибка обработки сообщения")
+
+@app.post("/api/v1/library/save")
+async def save_paper_to_library(
+    paper: Dict[str, Any],
+    current_user: Dict[str, Any] = Depends(get_current_user)
+):
+    """Сохранение статьи в библиотеку"""
+    try:
+        user_id = current_user["user_id"]
+        paper = paper.get('paper') or paper
+        logger.debug(f"Пользователь {user_id} пытается сохранить статью: {paper}")
+        logger.info(f"Пользователь {user_id} сохраняет статью {paper['external_id']}")
+
+        success = await db.save_paper(user_id, paper)
+        if success:
+            return {"message": "Статья сохранена", "success": True}
+        else:
+            return {"message": "Ошибка сохранения статьи", "success": False}
+
+    except Exception as e:
+        logger.error(f"Ошибка сохранения статьи: {e}")
+        raise HTTPException(status_code=500, detail="Ошибка сохранения статьи")
 
 if __name__ == "__main__":
     import uvicorn

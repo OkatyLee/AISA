@@ -1,7 +1,7 @@
 from datetime import datetime
 import sqlite3
 import hashlib
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Tuple
 import json
 from utils import setup_logger
 
@@ -282,37 +282,43 @@ class DatabaseManager:
                     WHERE user_id = ? AND saved_at > datetime('now', '-30 days')
                 ''', (user_id,))
                 recent_count = cursor.fetchone()[0]
+
+                def fetch_popular_content_by_field(field: str) -> List[Tuple[str, int]]:
+                    cursor.execute(f'''
+                        SELECT {field} FROM saved_publications
+                        WHERE user_id = ? AND {field} IS NOT NULL
+                    ''', (user_id,))
+    
                 
-                # Получение популярных тегов
-                cursor.execute('''
-                    SELECT tags FROM saved_publications 
-                    WHERE user_id = ? AND tags IS NOT NULL
-                ''', (user_id,))
+                    all_vals = []
+                    for row in cursor.fetchall():
+                        field_str = row[0] if row[0] else ""
+                        if field_str:
+                            # Теги сохранены как строка через запятую
+                            fields = field_str.split(', ')
+                            all_vals.extend(fields)
+
+                    # Подсчет популярности тегов
+                    field_counts = {}
+                    for field in all_vals:
+                        field_counts[field] = field_counts.get(field, 0) + 1
+
+                    popular_fields = sorted(field_counts.items(), key=lambda x: x[1], reverse=True)[:5]
+                    return popular_fields
                 
-                all_tags = []
-                for row in cursor.fetchall():
-                    tags_str = row[0] if row[0] else ""
-                    if tags_str:
-                        # Теги сохранены как строка через запятую
-                        tags = tags_str.split(', ')
-                        all_tags.extend(tags)
+                popular_tags = fetch_popular_content_by_field('tags')
                 
-                # Подсчет популярности тегов
-                tag_counts = {}
-                for tag in all_tags:
-                    tag_counts[tag] = tag_counts.get(tag, 0) + 1
-                
-                popular_tags = sorted(tag_counts.items(), key=lambda x: x[1], reverse=True)[:5]
-                
+                popular_authors = fetch_popular_content_by_field('authors')
                 return {
                     'total_papers': total_count,
                     'recent_papers': recent_count,
-                    'popular_tags': popular_tags
+                    'popular_tags': popular_tags,
+                    'popular_authors': popular_authors
                 }
 
         except Exception as e:
             logger.error(f"Ошибка при получении статуса библиотеки: {e}")
-            return {'total_papers': 0, 'recent_papers': 0, 'popular_tags': []}
+            return {'total_papers': 0, 'recent_papers': 0, 'popular_tags': [], 'popular_authors': []}
         
     async def add_note_to_paper(self, user_id: int, paper_id: int, note: str) -> bool:
         try:

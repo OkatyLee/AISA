@@ -412,7 +412,6 @@ async def handle_summary(callback: CallbackQuery, **kwargs):
                     types.FSInputFile(md_name), caption="Суммаризация статьи (Markdown)"
                 )
             delete_report_files(base_name)
-            await callback.message.answer(summary, parse_mode="Markdown")
 
         else:
             await callback.message.answer("❌ Статья не найдена")

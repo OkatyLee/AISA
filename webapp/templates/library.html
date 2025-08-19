@@ -3,69 +3,195 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Научная библиотека</title>
+    <title>Научный ассистент</title>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
-    <link rel="stylesheet" href="/static/styles.css">
+    <script src="/static/app.js?v=2.6" defer></script>
+    <link rel="stylesheet" href="/static/styles.css?v=2.6">
 </head>
 <body>
     <div id="app">
-        <!-- Заголовок -->
-        <header class="header">
-            <h1>📚 Моя библиотека</h1>
-            <div class="user-info" id="userInfo"></div>
-        </header>
+        <!-- Навигация -->
+        <nav class="sa-navigation">
+            <button class="sa-nav-btn active" data-tab="library">
+                <span class="nav-icon">📚</span>
+                <span class="nav-text-full">Библиотека</span>
+                <span class="nav-text-short">Библ.</span>
+            </button>
+            <button class="sa-nav-btn" data-tab="search">
+                <span class="nav-icon">🔍</span>
+                <span class="nav-text-full">Поиск</span>
+                <span class="nav-text-short">Поиск</span>
+            </button>
+            <button class="sa-nav-btn" data-tab="recommendations">
+                <span class="nav-icon">🎯</span>
+                <span class="nav-text-full">Рекомендации</span>
+                <span class="nav-text-short">Рек.</span>
+            </button>
+            <button class="sa-nav-btn" data-tab="chat">
+                <span class="nav-icon">💬</span>
+                <span class="nav-text-full">Чат</span>
+                <span class="nav-text-short">Чат</span>
+            </button>
+        </nav>
 
-        <!-- Статистика -->
-        <div class="stats-panel" id="statsPanel">
-            <div class="stat-item">
-                <span class="stat-value" id="totalPapers">0</span>
-                <span class="stat-label">статей</span>
+        <!-- Вкладка библиотеки -->
+        <div id="library-tab" class="sa-tab-content">
+            <!-- Заголовок -->
+            <header class="header">
+                <h1>📚 Моя библиотека</h1>
+                <div class="user-info" id="userInfo"></div>
+            </header>
+
+            <!-- Статистика -->
+            <div class="stats-panel" id="statsPanel">
+                <div class="stat-item">
+                    <span class="stat-value" id="totalPapers">0</span>
+                    <span class="stat-label">статей</span>
+                </div>
+            </div>
+
+            <!-- Поисковая строка по библиотеке -->
+            <div class="search-container">
+                <input type="text" id="librarySearchInput" placeholder="🔍 Поиск по библиотеке..." class="search-input">
+                <button id="clearLibrarySearch" class="clear-btn">✖</button>
+            </div>
+
+            <!-- Фильтры -->
+            <div class="filters">
+                <select id="tagFilter" class="filter-select">
+                    <option value="">Все категории</option>
+                </select>
+                <select id="sortFilter" class="filter-select">
+                    <option value="saved_at_desc">Новые первыми</option>
+                    <option value="saved_at_asc">Старые первыми</option>
+                    <option value="title_asc">По названию A-Z</option>
+                    <option value="title_desc">По названию Z-A</option>
+                </select>
+            </div>
+
+            <!-- Индикатор загрузки -->
+            <div class="loading hidden" id="libraryLoading">
+                <div class="spinner"></div>
+                <p>Загружаем библиотеку...</p>
+            </div>
+
+            <!-- Список статей -->
+            <div class="papers-container hidden" id="libraryPapersContainer">
+                <!-- Статьи будут добавлены динамически -->
+            </div>
+
+            <!-- Пагинация -->
+            <div class="pagination hidden" id="libraryPagination">
+                <button id="libraryPrevPage" class="page-btn">← Предыдущая</button>
+                <span id="libraryPageInfo" class="page-info">Страница 1 из 1</span>
+                <button id="libraryNextPage" class="page-btn">Следующая →</button>
+            </div>
+
+            <!-- Сообщение о пустой библиотеке -->
+            <div class="empty-state" id="libraryEmptyState">
+                <div class="empty-icon">📖</div>
+                <h3>Библиотека пуста</h3>
+                <p>Используйте поиск или чат для нахождения и сохранения научных статей</p>
+                <button id="goToSearch" class="primary-btn">Перейти к поиску</button>
             </div>
         </div>
 
-        <!-- Поисковая строка -->
-        <div class="search-container">
-            <input type="text" id="searchInput" placeholder="🔍 Поиск по библиотеке..." class="search-input">
-            <button id="clearSearch" class="clear-btn">✖</button>
+        <!-- Вкладка поиска -->
+        <div id="search-tab" class="sa-tab-content">
+            <header class="header">
+                <h1>🔍 Поиск статей</h1>
+            </header>
+
+            <!-- Форма поиска -->
+            <div class="search-form">
+                <div class="search-container">
+                    <input type="text" id="searchInput" placeholder="🔍 Поиск научных статей..." class="search-input">
+                    <button id="executeSearch" class="search-btn">Найти</button>
+                </div>
+
+                <!-- Фильтры поиска -->
+                <div class="search-filters">
+                    <select id="sourceFilter" class="filter-select">
+                        <option value="">Все источники</option>
+                        <option value="arxiv">ArXiv</option>
+                        <option value="ieee">IEEE Xplore</option>
+                        <option value="ncbi">PubMed</option>
+                        <option value="semantic_scholar">Semantic Scholar</option>
+                    </select>
+                    
+                    <input type="text" id="authorFilter" placeholder="Автор" class="filter-input">
+                    <input type="number" id="yearFilter" placeholder="Год" class="filter-input" min="1900" max="2025">
+                    <input type="number" id="limitFilter" placeholder="Лимит" class="filter-input" min="1" max="50" value="10">
+                </div>
+            </div>
+
+            <!-- Индикатор загрузки поиска -->
+            <div class="loading hidden" id="searchLoading">
+                <div class="spinner"></div>
+                <p>Выполняем поиск...</p>
+            </div>
+
+            <!-- Результаты поиска -->
+            <div class="papers-container" id="searchResultsContainer">
+                <!-- Результаты будут добавлены динамически -->
+            </div>
         </div>
 
-        <!-- Фильтры -->
-        <div class="filters">
-            <select id="tagFilter" class="filter-select">
-                <option value="">Все категории</option>
-            </select>
-            <select id="sortFilter" class="filter-select">
-                <option value="saved_at_desc">Новые первыми</option>
-                <option value="saved_at_asc">Старые первыми</option>
-                <option value="title_asc">По названию A-Z</option>
-                <option value="title_desc">По названию Z-A</option>
-            </select>
+        <!-- Вкладка рекомендаций -->
+        <div id="recommendations-tab" class="sa-tab-content">
+            <header class="header">
+                <h1>🎯 Рекомендации</h1>
+            </header>
+
+            <div class="recommendations-controls">
+                <p class="info-text">Рекомендации основаны на вашей библиотеке статей</p>
+                <button id="generateRecommendations" class="primary-btn">Получить рекомендации</button>
+            </div>
+
+            <!-- Индикатор загрузки рекомендаций -->
+            <div class="loading hidden" id="recommendationsLoading">
+                <div class="spinner"></div>
+                <p>Генерируем рекомендации...</p>
+            </div>
+
+            <!-- Результаты рекомендаций -->
+            <div class="papers-container" id="recommendationsContainer">
+                <!-- Рекомендации будут добавлены динамически -->
+            </div>
         </div>
 
-        <!-- Индикатор загрузки -->
-        <div class="loading" id="loading">
-            <div class="spinner"></div>
-            <p>Загружаем библиотеку...</p>
-        </div>
+        <!-- Вкладка чата -->
+        <div id="chat-tab" class="sa-tab-content">
+            <header class="header">
+                <h1>💬 AI Ассистент </h1>
+            </header>
 
-        <!-- Список статей -->
-        <div class="papers-container" id="papersContainer">
-            <!-- Статьи будут добавлены динамически -->
-        </div>
+            <!-- Область чата -->
+            <div class="chat-container" id="chatContainer">
+                <div class="chat-messages" id="chatMessages">
+                    <div class="message bot-message">
+                        <div class="message-content">
+                            Привет! Я ваш научный ассистент. Напишите, что вас интересует, и я помогу найти статьи или ответить на вопросы.
+                        </div>
+                    </div>
+                </div>
 
-        <!-- Пагинация -->
-        <div class="pagination" id="pagination">
-            <button id="prevPage" class="page-btn">← Предыдущая</button>
-            <span id="pageInfo" class="page-info">Страница 1 из 1</span>
-            <button id="nextPage" class="page-btn">Следующая →</button>
-        </div>
+                <!-- Индикатор печати -->
+                <div class="typing-indicator hidden" id="typingIndicator">
+                    <div class="typing-dots">
+                        <span></span>
+                        <span></span>
+                        <span></span>
+                    </div>
+                    <span>Ассистент печатает...</span>
+                </div>
 
-        <!-- Сообщение о пустой библиотеке -->
-        <div class="empty-state" id="emptyState">
-            <div class="empty-icon">📖</div>
-            <h3>Библиотека пуста</h3>
-            <p>Используйте бота для поиска и сохранения научных статей</p>
-            <button id="openBot" class="primary-btn">Открыть бота</button>
+                <!-- Поле ввода -->
+                <div class="chat-input-container">
+                    <input type="text" id="chatInput" placeholder="Задайте вопрос или опишите, что вас интересует..." class="chat-input">
+                    <button id="sendMessage" class="send-btn">📤</button>
+                </div>
+            </div>
         </div>
     </div>
 
@@ -81,11 +207,10 @@
             </div>
             <div class="modal-footer">
                 <button id="openOriginal" class="primary-btn">Открыть оригинал</button>
+                <button id="saveToLibrary" class="save-btn hidden">💾 Сохранить</button>
                 <button id="deletePaper" class="delete-btn">🗑 Удалить</button>
             </div>
         </div>
     </div>
-
-    <script src="/static/app.js"></script>
 </body>
 </html>
