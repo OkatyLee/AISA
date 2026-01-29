@@ -1,5 +1,3 @@
-from operator import is_
-import urllib.parse
 import httpx
 import urllib
 from config.config import load_config

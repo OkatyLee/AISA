@@ -1,22 +1,16 @@
 import asyncio
 from datetime import datetime
-from operator import call
 import re
 from typing import List, Dict, Any, Optional
 
 from dateutil.parser import parse
-from numpy import full
-from regex import W
-from sympy import N
 
 from services.search.semantic_scholar_service import SemanticScholarSearcher
-from services.utils import paper
 from services.utils.paper import Paper, PaperSearcher
 from services.search import ArxivSearcher
 from services.search import IEEESearcher
 from services.search import NCBISearcher
 from utils import setup_logger
-from typing import Tuple
 
 logger = setup_logger(
     name="search_service_logger",

@@ -1,0 +1,42 @@
+services:
+  # 1. FastAPI Backend
+  api:
+    build: .
+    command: uvicorn api.main:app --host 0.0.0.0 --port 8000
+    ports:
+      - "8000:8000"
+    volumes:
+      - .:/app  # Монтируем код, чтобы правки применялись без пересборки (Hot Reload)
+    restart: always
+    healthcheck:  # Добавьте healthcheck для проверки состояния
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # 2. Telegram Bot
+  bot:
+    build: .
+    command: python main.py
+    volumes:
+      - .:/app
+    depends_on:
+      api:
+        condition: service_healthy  
+    restart: always
+    environment:
+      # Если боту нужно знать адрес API внутри сети докера
+      - API_URL=http://api:8000 
+
+  # 3. Туннель (Ngrok)
+  # Используем официальный образ ngrok
+  tunnel:
+    image: ngrok/ngrok:latest
+    command: http api:8000 --host-header=rewrite --url ${WEBAPP_URL} # Туннелируем сервис "api" на порт 8000
+    environment:
+      - NGROK_AUTHTOKEN=${NGROK_AUTHTOKEN} # Токен берется из .env файла
+      - NGROK_HOST=${NGROK_HOST:-0.0.0.0}
+    ports:
+      - 4040:4040 # Инспектор запросов
+    depends_on:
+      - api

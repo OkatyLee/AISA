@@ -442,10 +442,23 @@ async def chat_with_assistant(
 ):
     """
     Чат с AI ассистентом для обработки естественного языка
+    
+    TODO: не работает извлечение намерений. Переписать логику общения.
     """
     try:
         user_id = current_user["user_id"]
         logger.info(f"Пользователь {user_id} отправил сообщение: '{chat_request.message}'")
+        
+        response = {
+            "intent": None,
+            "confidence": None,
+            "entities": None,
+            "response_text": "Извините, функция временно недоступна.",
+            "action": None,
+            "data": {}
+        }
+        
+        return ''
         
         # Инициализируем классификатор намерений
         intent_classifier = RuleBasedIntentClassifier()

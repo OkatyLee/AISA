@@ -1,10 +1,6 @@
 import asyncio
-from operator import is_
-from tkinter import NO
-import xml
 import dateutil
 import httpx
-from sympy import fu
 from config import load_config
 from config.constants import NCBI_API_BASE_URL, API_TIMEOUT_SECONDS
 from services.utils.paper import Paper, PaperSearcher

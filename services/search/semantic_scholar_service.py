@@ -31,15 +31,24 @@ class SemanticScholarSearcher(PaperSearcher):
     async def __aenter__(self):
         if self._client is None:
             headers = {
-                "User-Agent": "SemanticScholarService/1.0",
-                "Accept": "application/json"
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+                "Accept-Language": "en-US,en;q=0.5",
+                "Accept-Encoding": "gzip, deflate, br",
+                "Connection": "keep-alive",
             }
+            proxies = {
+                "http://": "http://user:pass@50.122.86.118:80",
+                "https://": "https://user:pass@50.122.86.118:80",
+            }
+
             if self.api_key:
                 headers["x-api-key"] = self.api_key
             
             self._client = httpx.AsyncClient(
                 timeout=httpx.Timeout(30),
                 headers=headers,
+                #proxy=proxies,
                 limits=httpx.Limits(max_connections=10, max_keepalive_connections=5),
                 follow_redirects=True
             )
