@@ -7,8 +7,6 @@ import tempfile
 from typing import Optional, Tuple
 import os
 from datetime import datetime
-import fitz
-from sympy import im
 
 from utils.logger import setup_logger  # PyMuPDF
 logger = setup_logger(

@@ -2,10 +2,8 @@ from __future__ import annotations
 from aiogram.types import Message, CallbackQuery, InlineKeyboardButton
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.utils.keyboard import InlineKeyboardBuilder
-from sympy import public
 from config import COMMAND_MESSAGES, SEARCH_DELAY_SECONDS, TYPING_DELAY_SECONDS
 import asyncio
-from services.utils.keyboard import create_paper_keyboard
 from utils.logger import setup_logger
 from database import SQLDatabase as db
 from aiogram.utils.markdown import hbold, hitalic, hlink

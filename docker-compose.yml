@@ -2,7 +2,18 @@ services:
   # 1. FastAPI Backend
   api:
     build: .
-    command: uvicorn api.main:app --host 0.0.0.0 --port 8000
+    
+    deploy:
+      resources:
+        limits:
+          memory: 512M  # Максимум, сколько может взять
+        reservations:
+          memory: 128M # Гарантированный минимум
+    
+    environment:
+      - PYTHONPATH=/usr/local/lib/python3.12/site-packages:/app
+      
+    command: uvicorn api.main:app --host 0.0.0.0 --port 8000 --workers 1
     ports:
       - "8000:8000"
     volumes:
@@ -17,6 +28,10 @@ services:
   # 2. Telegram Bot
   bot:
     build: .
+    deploy:
+      resources:
+        limits:
+          memory: 256M
     command: python main.py
     volumes:
       - .:/app
@@ -28,15 +43,64 @@ services:
       # Если боту нужно знать адрес API внутри сети докера
       - API_URL=http://api:8000 
 
-  # 3. Туннель (Ngrok)
-  # Используем официальный образ ngrok
-  tunnel:
-    image: ngrok/ngrok:latest
-    command: http api:8000 --host-header=rewrite --url ${WEBAPP_URL} # Туннелируем сервис "api" на порт 8000
-    environment:
-      - NGROK_AUTHTOKEN=${NGROK_AUTHTOKEN} # Токен берется из .env файла
-      - NGROK_HOST=${NGROK_HOST:-0.0.0.0}
+  # 3. Ollama (локальная LLM)
+  ollama:
+    image: ollama/ollama:latest
+    deploy:
+      resources:
+        limits:
+          memory: 4G  # Для 3B модели достаточно 4GB
+        reservations:
+          memory: 2G
     ports:
-      - 4040:4040 # Инспектор запросов
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama  # Сохраняем модели между перезапусками
+    restart: always
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s  # Даём время на загрузку
+
+  # 4. Инициализация модели Ollama (одноразовый запуск)
+  ollama-init:
+    image: curlimages/curl:latest
+    depends_on:
+      ollama:
+        condition: service_healthy
+    entrypoint: >
+      sh -c "curl -X POST http://ollama:11434/api/pull -d '{\"name\": \"qwen2.5:3b\"}' && echo 'Model pulled successfully'"
+    restart: "no"
+
+  # 5. Туннель (Ngrok)
+  # Используем официальный образ ngrok
+#  tunnel:
+#    image: ngrok/ngrok:latest
+#    command: http api:8000 --host-header=rewrite --url ${WEBAPP_URL} # Туннелируем сервис "api" на порт 8000
+#    environment:
+#      - NGROK_AUTHTOKEN=${NGROK_AUTHTOKEN} # Токен берется из .env файла
+#      - NGROK_HOST=${NGROK_HOST:-0.0.0.0}
+#    ports:
+#      - 4040:4040 # Инспектор запросов
+#    depends_on:
+#      - api
+
+  cloudpub:
+    image: cloudpub/cloudpub:latest
+    command: run
+    restart: unless-stopped
+    environment:
+      - TOKEN=${CLOUDPUB_TOKEN}
+      - HTTP=api:8000
     depends_on:
       - api
+    ports:
+      - 4040:4040
+    volumes:
+      - cloudpub-config:/home/cloudpub
+
+volumes:
+  ollama_data:  # Persistent storage для моделей Ollama
+  cloudpub-config:

@@ -1,3 +1,19 @@
+"""
+DEPRECATED: Этот модуль устарел и будет удален в следующей версии.
+Используйте handlers.chat_handler вместо этого.
+
+Для обновления импортов:
+    OLD: from handlers.messages import MessageHandler
+    NEW: from handlers.chat_handler import handle_message
+"""
+
+import warnings
+warnings.warn(
+    "handlers.messages is deprecated. Use handlers.chat_handler instead.",
+    DeprecationWarning,
+    stacklevel=2
+)
+
 import os
 from aiogram import Dispatcher, F
 from aiogram.types import Message, FSInputFile

@@ -3,7 +3,7 @@ from database import SQLDatabase as db
 from services.search import SearchService
 from services.search.semantic_scholar_service import SemanticScholarSearcher
 from services.utils.paper import Paper
-from services.nlp import LLMService
+from services.llm import PaperService  # Заменили LLMService на PaperService
 from services.utils.keyboard import create_paper_keyboard 
 from utils.error_handler import ErrorHandler
 from utils.metrics import track_operation
@@ -392,8 +392,14 @@ async def handle_summary(callback: CallbackQuery, **kwargs):
             processing_msg = await callback.message.answer(
                 "⏳ Анализирую статью, это может занять некоторое время..."
             )
-            async with LLMService() as llm_service:
-                summary = await llm_service.summarize(paper)
+            
+            # Используем новый PaperService
+            paper_service = PaperService()
+            try:
+                paper_dict = paper.to_dict() if hasattr(paper, 'to_dict') else paper
+                summary = await paper_service.summarize(paper_dict)
+            finally:
+                await paper_service.close()
                 
             if processing_msg:
                 await processing_msg.delete()

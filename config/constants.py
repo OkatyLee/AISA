@@ -37,3 +37,12 @@ NCBI_API_BASE_URL = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils"
 # LLM API (статичные данные)
 LLM_API_BASE_URL = "https://openrouter.ai/api/v1"
 
+# Ollama (локальная LLM)
+OLLAMA_BASE_URL = "http://ollama:11434"  # В Docker
+OLLAMA_LOCAL_URL = "http://localhost:11434"  # Для локальной разработки
+OLLAMA_MODEL = "qwen2.5:3b"  # Лёгкая модель для NLU
+
+# OpenRouter models
+OPENROUTER_CHAT_MODEL = "qwen/qwen3-30b-a3b:free"  # Для чата
+OPENROUTER_SUMMARY_MODEL = "qwen/qwen3-30b-a3b:free"  # Для суммаризации
+

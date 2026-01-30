@@ -42,18 +42,34 @@ class Paper:
         self.semantic_score = semantic_score
 
     def to_dict(self):
+        # Конвертируем datetime в строку для JSON сериализации
+        pub_date = self.publication_date
+        if isinstance(pub_date, datetime):
+            pub_date = pub_date.isoformat()
+        elif pub_date is None:
+            pub_date = ""
+            
+        # Очищаем source_metadata от datetime объектов
+        clean_metadata = {}
+        if self.source_metadata:
+            for k, v in self.source_metadata.items():
+                if isinstance(v, datetime):
+                    clean_metadata[k] = v.isoformat()
+                else:
+                    clean_metadata[k] = v
+        
         return {
             "title": self.title,
             "authors": self.authors,
             "abstract": self.abstract,
             "doi": self.doi,
-            "publication_date": self.publication_date,
+            "publication_date": pub_date,
             "journal": self.journal,
             "tags": self.tags,
             "url": self.url,
             "external_id": self.external_id,
             "source": self.source,
-            "source_metadata": self.source_metadata
+            "source_metadata": clean_metadata
         }   
         
     def __getitem__(self, key):

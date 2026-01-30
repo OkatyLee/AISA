@@ -1,8 +1,9 @@
-from fastapi import FastAPI, HTTPException, Depends
+from fastapi import FastAPI, HTTPException, Depends, status
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
 from fastapi import Request
+from datetime import datetime
 from fastapi.middleware.cors import CORSMiddleware
 import hashlib
 import hmac
@@ -14,6 +15,7 @@ from database import SQLDatabase as db
 from config.config import load_config
 import logging
 from utils import setup_logger
+import time
 
 # Импорты для новой функциональности
 from services.search import SearchService
@@ -22,16 +24,22 @@ from services.search.semantic_scholar_service import SemanticScholarSearcher
 from services.search.ieee_service import IEEESearcher
 from services.search.ncbi_service import NCBISearcher
 from services.utils.paper import Paper
-from nlp.intent_classifier import RuleBasedIntentClassifier
-from nlp.entity_classifier import RuleBasedEntityExtractor
+from nlu import NLUPipeline, Intent  # Новый NLU
+from nlu.classifiers import LLMIntentClassifier, LLMEntityExtractor
 from services.utils.search_utils import SearchUtils
+from services.llm import ChatService, PaperService
 import asyncio
 
 # Настройка логирования
 logger = setup_logger(name="api_logger", log_file="logs/api.log", level=logging.DEBUG)
 
 app = FastAPI(title="Scientific Assistant API", version="1.0.0")
+start_time = time.time()
 
+# Глобальные сервисы (инициализируются при старте)
+_nlu_pipeline: NLUPipeline = None
+_chat_service: ChatService = None
+_paper_service: PaperService = None
 # Конфигурация
 config = load_config()
 
@@ -76,6 +84,50 @@ class RecommendationRequest(BaseModel):
 class ChatRequest(BaseModel):
     message: str
     context: Optional[List[Dict[str, Any]]] = []
+
+
+class ChatResponse(BaseModel):
+    """Ответ от чат-ассистента"""
+    intent: str
+    confidence: float
+    entities: List[Dict[str, Any]]
+    response_text: str
+    action: Optional[str] = None
+    data: Dict[str, Any] = {}
+    needs_cloud_llm: bool = False
+
+
+@app.on_event("startup")
+async def startup_event():
+    """Инициализация сервисов при старте API."""
+    global _nlu_pipeline, _chat_service, _paper_service
+    
+    from config.constants import OLLAMA_BASE_URL
+    
+    _nlu_pipeline = NLUPipeline(
+        ollama_url=OLLAMA_BASE_URL,
+        db_path="db/scientific_assistant.db"
+    )
+    _chat_service = ChatService(ollama_url=OLLAMA_BASE_URL)
+    _paper_service = PaperService()
+    
+    await _chat_service.initialize()
+    logger.info("API chat services initialized")
+
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """Закрытие сервисов при остановке API."""
+    global _nlu_pipeline, _chat_service, _paper_service
+    
+    if _nlu_pipeline:
+        await _nlu_pipeline.close()
+    if _chat_service:
+        await _chat_service.close()
+    if _paper_service:
+        await _paper_service.close()
+    
+    logger.info("API chat services closed")
 
 def validate_telegram_init_data(init_data: str) -> Optional[Dict[str, Any]]:
     """
@@ -158,6 +210,26 @@ def get_current_user(request: Request) -> Dict[str, Any]:
 async def mini_app_root(request: Request):
     """Главная страница Mini App"""
     return templates.TemplateResponse("library.html", {"request": request})
+
+start_time = time.time()
+
+
+@app.get("/health", status_code=status.HTTP_200_OK)
+async def health_check():
+    """
+    Health check endpoint для Docker healthcheck
+    Возвращает статус сервиса и время работы
+    """
+    uptime = time.time() - start_time
+    
+    return JSONResponse(
+        status_code=status.HTTP_200_OK,
+        content={
+            "status": "healthy",
+            "uptime_seconds": round(uptime, 2),
+            "service": "api"
+        }
+    )
 
 @app.get("/api/v1/user/info")
 async def get_user_info(current_user: Dict[str, Any] = Depends(get_current_user)):
@@ -435,102 +507,247 @@ async def get_recommendations(
         logger.error(f"Ошибка получения рекомендаций: {e}")
         raise HTTPException(status_code=500, detail="Ошибка получения рекомендаций")
 
-@app.post("/api/v1/chat")
+@app.post("/api/v1/chat", response_model=ChatResponse)
 async def chat_with_assistant(
     chat_request: ChatRequest,
     current_user: Dict[str, Any] = Depends(get_current_user)
 ):
     """
-    Чат с AI ассистентом для обработки естественного языка
+    Чат с AI ассистентом для обработки естественного языка.
     
-    TODO: не работает извлечение намерений. Переписать логику общения.
+    Интегрирует NLU Pipeline для понимания запросов и выполнения действий.
     """
+    global _nlu_pipeline, _chat_service, _paper_service
+    
     try:
         user_id = current_user["user_id"]
-        logger.info(f"Пользователь {user_id} отправил сообщение: '{chat_request.message}'")
+        message = chat_request.message.strip()
+        logger.info(f"Пользователь {user_id} отправил сообщение: '{message}'")
         
-        response = {
-            "intent": None,
-            "confidence": None,
-            "entities": None,
-            "response_text": "Извините, функция временно недоступна.",
-            "action": None,
-            "data": {}
-        }
+        # Обработка через NLU Pipeline
+        nlu_result = await _nlu_pipeline.process(user_id=user_id, message=message)
         
-        return ''
-        
-        # Инициализируем классификатор намерений
-        intent_classifier = RuleBasedIntentClassifier()
-        entity_extractor = RuleBasedEntityExtractor()
-        
-        # Определяем намерение
-        intent_result = intent_classifier.classify(chat_request.message)
-        entities = await entity_extractor.extract(chat_request.message, None)
-
-        response = {
-            "intent": intent_result.intent.value,
-            "confidence": intent_result.confidence,
-            "entities": entities,
-            "response_text": "",
-            "action": None,
-            "data": {}
-        }
-        
-        # Обрабатываем намерения
-        if intent_result.intent.value == "search":
-            query = entities.get("query", chat_request.message)
-            response["action"] = "search"
-            response["data"] = {
-                "query": query,
-                "filters": {
-                    "author": entities.get("author"),
-                    "year": entities.get("year"),
-                    "journal": entities.get("journal")
-                }
+        intent = nlu_result.intent.intent
+        entities = [
+            {
+                "type": e.type.value,
+                "value": e.value,
+                "confidence": e.confidence,
+                "normalized": e.normalized_value
             }
-            response["response_text"] = f"Ищу статьи по запросу: {query}"
+            for e in nlu_result.entities.entities
+        ]
+        
+        response_text = ""
+        action = None
+        data = {}
+        
+        # Обработка по интентам
+        if intent == Intent.SEARCH:
+            # Поиск статей
+            query = nlu_result.query_params.get("query", message)
+            filters = {}
             
-        elif intent_result.intent.value == "list_saved":
-            response["action"] = "show_library"
-            response["response_text"] = "Показываю вашу библиотеку статей"
+            if nlu_result.query_params.get("year"):
+                filters["year"] = nlu_result.query_params["year"]
+            if nlu_result.query_params.get("author"):
+                filters["author"] = nlu_result.query_params["author"]
             
-        elif intent_result.intent.value == "get_summary":
-            urls = entities.get("urls", [])
-            if urls:
-                response["action"] = "summarize"
-                response["data"] = {"urls": urls}
-                response["response_text"] = f"Готовлю краткое изложение статьи: {urls[0]}"
-            else:
-                response["response_text"] = "Пожалуйста, предоставьте ссылку на статью для создания резюме"
+            source = nlu_result.query_params.get("source")
+            
+            # Выполняем поиск
+            try:
+                search_results = []
+                if source == "arxiv":
+                    async with ArxivSearcher() as searcher:
+                        search_results = await searcher.search_papers(query, limit=10, filters=filters)
+                elif source == "ieee":
+                    async with IEEESearcher() as searcher:
+                        search_results = await searcher.search_papers(query, limit=10, filters=filters)
+                elif source == "ncbi":
+                    async with NCBISearcher() as searcher:
+                        search_results = await searcher.search_papers(query, limit=10, filters=filters)
+                elif source == "semantic_scholar":
+                    async with SemanticScholarSearcher() as searcher:
+                        search_results = await searcher.search_papers(query, limit=10, filters=filters)
+                else:
+                    async with SearchService() as search_service:
+                        search_results = await search_service.search_papers(query, limit=10, filters=filters)
+                        search_results = search_service.aggregate_results(search_results, query)
                 
-        elif intent_result.intent.value == "help":
-            response["response_text"] = (
-                "Я могу помочь вам:\n"
-                "🔍 Искать научные статьи\n"
-                "📚 Управлять библиотекой\n"
-                "🎯 Получать рекомендации\n"
-                "📄 Создавать резюме статей\n\n"
-                "Просто напишите, что вас интересует!"
-            )
-            
-        elif intent_result.intent.value == "greeting":
-            response["response_text"] = (
-                "Привет! Я ваш научный ассистент. "
-                "Я помогу найти и организовать научные статьи. "
-                "Что вас интересует?"
-            )
-            
+                # Форматируем результаты
+                formatted_results = []
+                for paper in search_results:
+                    paper_dict = paper.to_dict() if hasattr(paper, 'to_dict') else paper.__dict__
+                    formatted_results.append(paper_dict)
+                
+                data["papers"] = formatted_results
+                data["query"] = query
+                action = "show_search_results"
+                
+                if formatted_results:
+                    response_text = f"🔍 Найдено {len(formatted_results)} статей по запросу «{query}»"
+                    # Обновляем контекст с результатами поиска
+                    await _nlu_pipeline.update_context(
+                        user_id=user_id,
+                        message=message,
+                        result=nlu_result,
+                        bot_response=response_text,
+                        search_results=formatted_results[:10]
+                    )
+                else:
+                    response_text = f"😔 К сожалению, по запросу «{query}» ничего не найдено. Попробуйте уточнить запрос."
+                    
+            except Exception as e:
+                logger.error(f"Ошибка поиска: {e}")
+                response_text = "❌ Произошла ошибка при поиске. Попробуйте позже."
+        
+        elif intent == Intent.LIST_LIBRARY:
+            # Показать библиотеку
+            papers = await db.get_user_library(user_id)
+            formatted_papers = [
+                {
+                    "id": p.get("id"),
+                    "title": p.get("title", "Без названия"),
+                    "authors": p.get("authors", ""),
+                    "url": p.get("url", ""),
+                }
+                for p in papers[:20]
+            ]
+            data["papers"] = formatted_papers
+            action = "show_library"
+            response_text = f"📚 В вашей библиотеке {len(papers)} статей"
+        
+        elif intent == Intent.GET_SUMMARY:
+            # Суммаризация статьи
+            article = nlu_result.query_params.get("article")
+            if article:
+                try:
+                    summary = await _paper_service.summarize(article)
+                    data["summary"] = summary
+                    data["article"] = article
+                    action = "show_summary"
+                    response_text = summary
+                except Exception as e:
+                    logger.error(f"Ошибка суммаризации: {e}")
+                    response_text = "❌ Не удалось создать саммари. Попробуйте позже."
+            else:
+                response_text = "🤔 Укажите статью для суммаризации. Например: «Кратко о первой статье»"
+        
+        elif intent == Intent.EXPLAIN:
+            # Объяснение концепции или статьи
+            article = nlu_result.query_params.get("article")
+            if article:
+                try:
+                    explanation = await _paper_service.explain(article)
+                    data["explanation"] = explanation
+                    data["article"] = article
+                    action = "show_explanation"
+                    response_text = explanation
+                except Exception as e:
+                    logger.error(f"Ошибка объяснения: {e}")
+                    response_text = "❌ Не удалось создать объяснение. Попробуйте позже."
+            else:
+                # Общее объяснение через чат
+                context = await _nlu_pipeline.context_manager.get_context(user_id)
+                response_text = await _chat_service.chat(message, context=context)
+                action = "chat_response"
+        
+        elif intent == Intent.COMPARE:
+            # Сравнение статей
+            articles = nlu_result.query_params.get("articles", [])
+            if len(articles) >= 2:
+                try:
+                    comparison = await _paper_service.compare(articles[:5])
+                    data["comparison"] = comparison
+                    data["articles"] = articles
+                    action = "show_comparison"
+                    response_text = comparison
+                except Exception as e:
+                    logger.error(f"Ошибка сравнения: {e}")
+                    response_text = "❌ Не удалось сравнить статьи. Попробуйте позже."
+            else:
+                response_text = "🤔 Для сравнения нужно минимум 2 статьи. Сначала выполните поиск."
+        
+        elif intent == Intent.SAVE_ARTICLE:
+            # Сохранение статьи
+            article = nlu_result.query_params.get("article")
+            if article:
+                success = await db.save_paper(user_id, article)
+                if success:
+                    response_text = f"✅ Статья «{article.get('title', 'Без названия')[:50]}...» сохранена в библиотеку"
+                    action = "article_saved"
+                else:
+                    response_text = "❌ Не удалось сохранить статью"
+            else:
+                response_text = "🤔 Укажите статью для сохранения. Например: «Сохрани первую статью»"
+        
+        elif intent == Intent.DELETE_ARTICLE:
+            # Удаление статьи
+            article = nlu_result.query_params.get("article")
+            if article and article.get("id"):
+                success = await db.delete_paper(user_id, article["id"])
+                if success:
+                    response_text = "🗑️ Статья удалена из библиотеки"
+                    action = "article_deleted"
+                else:
+                    response_text = "❌ Не удалось удалить статью"
+            else:
+                response_text = "🤔 Укажите статью для удаления"
+        
+        elif intent == Intent.HELP:
+            response_text = """🤖 **Я — AI Scientific Assistant (AISA)**
+
+Вот что я умею:
+
+🔍 **Поиск статей:**
+• «Найди статьи про machine learning»
+• «Статьи по NLP за 2024 год»
+• «Поиск в arxiv: transformers»
+
+📚 **Работа с библиотекой:**
+• «Покажи мою библиотеку»
+• «Сохрани первую статью»
+
+📝 **Анализ статей:**
+• «Кратко о первой статье»
+• «Объясни вторую статью»
+• «Сравни статьи 1 и 2»
+
+Просто напишите, что вас интересует!"""
+            action = "show_help"
+        
+        elif intent == Intent.GREETING:
+            response_text = "👋 Привет! Я AISA — ваш научный ассистент. Чем могу помочь? Напишите /help для списка команд."
+            action = "greeting"
+        
         else:
-            response["response_text"] = (
-                "Я не совсем понял ваш запрос. "
-                "Попробуйте спросить о поиске статей, библиотеке или помощи."
+            # CHAT или UNKNOWN — обычный чат
+            context = await _nlu_pipeline.context_manager.get_context(user_id)
+            response_text = await _chat_service.chat(message, context=context)
+            action = "chat_response"
+        
+        # Обновляем контекст (если ещё не обновили)
+        if action not in ["show_search_results"]:
+            await _nlu_pipeline.update_context(
+                user_id=user_id,
+                message=message,
+                result=nlu_result,
+                bot_response=response_text
             )
         
-        return response
+        return ChatResponse(
+            intent=intent.value,
+            confidence=nlu_result.intent.confidence,
+            entities=entities,
+            response_text=response_text,
+            action=action,
+            data=data,
+            needs_cloud_llm=nlu_result.needs_cloud_llm
+        )
         
     except Exception as e:
-        logger.error(f"Ошибка обработки чата: {e}")
+        logger.error(f"Ошибка обработки чата: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Ошибка обработки сообщения")
 
 @app.post("/api/v1/library/save")
@@ -554,6 +771,217 @@ async def save_paper_to_library(
     except Exception as e:
         logger.error(f"Ошибка сохранения статьи: {e}")
         raise HTTPException(status_code=500, detail="Ошибка сохранения статьи")
+
+
+@app.post("/api/v1/chat/test")
+async def chat_test(chat_request: ChatRequest):
+    """
+    Тестовый endpoint для чата без авторизации.
+    
+    Использует фиктивный user_id = 0 для тестирования.
+    """
+    global _nlu_pipeline, _chat_service
+    
+    try:
+        user_id = 0  # Тестовый пользователь
+        message = chat_request.message.strip()
+        logger.info(f"Тестовый запрос: '{message}'")
+        
+        # Обработка через NLU Pipeline
+        nlu_result = await _nlu_pipeline.process(user_id=user_id, message=message)
+        
+        intent = nlu_result.intent.intent
+        entities = [
+            {
+                "type": e.type.value,
+                "value": e.value,
+                "confidence": e.confidence,
+                "normalized": e.normalized_value
+            }
+            for e in nlu_result.entities.entities
+        ]
+        
+        # Для теста просто возвращаем NLU результат
+        response_text = ""
+        if intent == Intent.SEARCH:
+            query = nlu_result.query_params.get("query", message)
+            response_text = f"🔍 Распознан поиск: «{query}»"
+        elif intent == Intent.CHAT:
+            context = await _nlu_pipeline.context_manager.get_context(user_id)
+            response_text = await _chat_service.chat(message, context=context)
+        else:
+            response_text = f"Распознан интент: {intent.value}"
+        
+        return ChatResponse(
+            intent=intent.value,
+            confidence=nlu_result.intent.confidence,
+            entities=entities,
+            response_text=response_text,
+            action="test",
+            data={"query_params": nlu_result.query_params},
+            needs_cloud_llm=nlu_result.needs_cloud_llm
+        )
+        
+    except Exception as e:
+        logger.error(f"Ошибка тестового чата: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/v1/chat/stream")
+async def chat_stream(
+    chat_request: ChatRequest,
+    current_user: Dict[str, Any] = Depends(get_current_user)
+):
+    """
+    Streaming чат с AI ассистентом.
+    
+    Возвращает Server-Sent Events (SSE) для потокового вывода.
+    """
+    global _nlu_pipeline, _chat_service
+    
+    user_id = current_user["user_id"]
+    message = chat_request.message.strip()
+    
+    async def generate():
+        try:
+            # Сначала обрабатываем через NLU
+            nlu_result = await _nlu_pipeline.process(user_id=user_id, message=message)
+            intent = nlu_result.intent.intent
+            
+            # Отправляем метаданные
+            metadata = {
+                "event": "metadata",
+                "intent": intent.value,
+                "confidence": nlu_result.intent.confidence,
+                "entities": [
+                    {"type": e.type.value, "value": e.value}
+                    for e in nlu_result.entities.entities
+                ]
+            }
+            yield f"data: {json.dumps(metadata, ensure_ascii=False)}\n\n"
+            
+            # Для поиска выполняем его и возвращаем результат
+            if intent == Intent.SEARCH:
+                query = nlu_result.query_params.get("query", message)
+                yield f"data: {json.dumps({'event': 'text', 'content': f'🔍 Ищу статьи по запросу «{query}»...'}, ensure_ascii=False)}\n\n"
+                
+                try:
+                    async with SearchService() as search_service:
+                        search_results = await search_service.search_papers(query, limit=10)
+                        search_results = search_service.aggregate_results(search_results, query)
+                    
+                    formatted_results = []
+                    for paper in search_results:
+                        paper_dict = paper.to_dict() if hasattr(paper, 'to_dict') else paper.__dict__
+                        formatted_results.append(paper_dict)
+                    
+                    result_event = {
+                        "event": "search_results",
+                        "papers": formatted_results,
+                        "query": query,
+                        "count": len(formatted_results)
+                    }
+                    yield f"data: {json.dumps(result_event, ensure_ascii=False)}\n\n"
+                    
+                except Exception as e:
+                    logger.error(f"Ошибка поиска: {e}")
+                    yield f"data: {json.dumps({'event': 'error', 'message': str(e)}, ensure_ascii=False)}\n\n"
+            
+            # Для чата стримим ответ
+            elif intent in [Intent.CHAT, Intent.UNKNOWN, Intent.GREETING, Intent.HELP]:
+                context = await _nlu_pipeline.context_manager.get_context(user_id)
+                
+                full_response = ""
+                async for chunk in _chat_service.chat_stream(message, context=context):
+                    full_response += chunk
+                    yield f"data: {json.dumps({'event': 'text', 'content': chunk}, ensure_ascii=False)}\n\n"
+                
+                # Обновляем контекст
+                await _nlu_pipeline.update_context(
+                    user_id=user_id,
+                    message=message,
+                    result=nlu_result,
+                    bot_response=full_response
+                )
+            
+            else:
+                # Для других интентов — обычный ответ
+                yield f"data: {json.dumps({'event': 'text', 'content': f'Распознан интент: {intent.value}'}, ensure_ascii=False)}\n\n"
+            
+            # Завершение
+            yield f"data: {json.dumps({'event': 'done'})}\n\n"
+            
+        except Exception as e:
+            logger.error(f"Ошибка streaming: {e}", exc_info=True)
+            yield f"data: {json.dumps({'event': 'error', 'message': str(e)}, ensure_ascii=False)}\n\n"
+    
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no"
+        }
+    )
+
+
+@app.post("/api/v1/chat/stream/test")
+async def chat_stream_test(chat_request: ChatRequest):
+    """
+    Тестовый streaming endpoint без авторизации.
+    """
+    global _nlu_pipeline, _chat_service
+    
+    user_id = 0
+    message = chat_request.message.strip()
+    
+    async def generate():
+        try:
+            nlu_result = await _nlu_pipeline.process(user_id=user_id, message=message)
+            intent = nlu_result.intent.intent
+            
+            # Метаданные
+            metadata = {
+                "event": "metadata",
+                "intent": intent.value,
+                "confidence": nlu_result.intent.confidence,
+                "query_params": nlu_result.query_params
+            }
+            yield f"data: {json.dumps(metadata, ensure_ascii=False)}\n\n"
+            
+            if intent == Intent.SEARCH:
+                query = nlu_result.query_params.get("query", message)
+                yield f"data: {json.dumps({'event': 'text', 'content': f'🔍 Поиск: «{query}»'}, ensure_ascii=False)}\n\n"
+                
+                async with SearchService() as search_service:
+                    search_results = await search_service.search_papers(query, limit=5)
+                    search_results = search_service.aggregate_results(search_results, query)
+                
+                for paper in search_results:
+                    paper_dict = paper.to_dict() if hasattr(paper, 'to_dict') else paper.__dict__
+                    yield f"data: {json.dumps({'event': 'paper', 'paper': paper_dict}, ensure_ascii=False)}\n\n"
+                
+            elif intent in [Intent.CHAT, Intent.UNKNOWN]:
+                context = await _nlu_pipeline.context_manager.get_context(user_id)
+                async for chunk in _chat_service.chat_stream(message, context=context):
+                    yield f"data: {json.dumps({'event': 'text', 'content': chunk}, ensure_ascii=False)}\n\n"
+            
+            else:
+                yield f"data: {json.dumps({'event': 'text', 'content': f'Intent: {intent.value}'}, ensure_ascii=False)}\n\n"
+            
+            yield f"data: {json.dumps({'event': 'done'})}\n\n"
+            
+        except Exception as e:
+            logger.error(f"Ошибка: {e}", exc_info=True)
+            yield f"data: {json.dumps({'event': 'error', 'message': str(e)}, ensure_ascii=False)}\n\n"
+    
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
+    )
+
 
 if __name__ == "__main__":
     import uvicorn
